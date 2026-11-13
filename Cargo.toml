@@ -1,0 +1,25 @@
+[package]
+name = "bellbeat"
+version = "0.5.0"
+edition = "2021"
+license = "MIT"
+description = "Asciiverse rhythm game: notes fall down four lanes, and every note you hit plays the melody; Rust + Ratatui"
+
+[[bin]]
+name = "bellbeat"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.30"
+log = "0.4"
+env_logger = "0.11"
+rodio = { version = "0.22", default-features = false, features = ["playback"] }
+gilrs = { version = "0.11", optional = true, default-features = false, features = ["xinput"] }
+
+[features]
+# gamepads are first-class in Asciiverse (the Steam Deck plan)
+default = ["gamepad"]
+gamepad = ["dep:gilrs"]
+
+[profile.release]
+debug = 1
