@@ -5,7 +5,8 @@ use crate::chart::{self, Difficulty, LANES};
 use crate::input::{nav, Nav, Press, K};
 use crate::play::{Cue, Play, LEAD_IN};
 use crate::save::{self, Best, Settings};
-use crate::song::Song;
+use crate::editor::{Action, Editor};
+use crate::song::{Broken, Song};
 use crate::synth::{Audio, Inst, Mode};
 use std::sync::Arc;
 use std::time::Instant;
@@ -121,10 +122,13 @@ pub enum Screen {
     Calibrate(Cal),
     /// Choosing a section and a tempo to practise.
     Practice,
+    /// The song editor (`App::editor`).
+    Edit,
 }
 
 pub const PAUSE_ITEMS: [&str; 3] = ["Carry on", "Start again", "Back to the songs"];
 pub const PRACTICE_PAUSE_ITEMS: [&str; 3] = ["Carry on", "Start again", "Choose a section"];
+pub const EDITOR_PAUSE_ITEMS: [&str; 3] = ["Carry on", "Start again", "Back to the editor"];
 
 /// Practice tempos, as shares of the song's own.
 pub const SPEEDS: [f32; 6] = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5];
@@ -139,6 +143,9 @@ pub struct Practice {
     /// Times played through, and the last run's accuracy.
     pub runs: u32,
     pub last: Option<f64>,
+    /// Tried from the editor: from the section to the song's end, once,
+    /// then back to the editor.
+    pub editor: bool,
 }
 
 impl Practice {
@@ -161,8 +168,12 @@ impl Practice {
 
 pub struct App {
     pub screen: Screen,
-    /// Every song on the list, built-in ones first.
+    /// Every song on the list, built-in ones first, then the players'.
     pub songs: Vec<Arc<Song>>,
+    /// Players' song files that do not parse, listed after the songs.
+    pub broken: Vec<Broken>,
+    /// The song being edited, kept while it is tried out.
+    pub editor: Option<Box<Editor>>,
     pub practice: Option<Practice>,
     pub sel: usize,
     pub diff: Difficulty,
@@ -188,6 +199,8 @@ impl App {
         App {
             screen: Screen::Select,
             songs,
+            broken: Vec::new(),
+            editor: None,
             practice: None,
             sel: 1,
             diff: Difficulty::Normal,
@@ -214,6 +227,211 @@ impl App {
 
     pub fn find(&self, id: &str) -> Option<usize> {
         self.songs.iter().position(|s| s.id == id)
+    }
+
+    /// Read the players' song folders again (at the start, and after
+    /// the editor), keeping the same song chosen.
+    pub fn load_user_songs(&mut self) {
+        let keep = self.entry_id();
+        self.songs.retain(|s| s.builtin);
+        self.density.truncate(self.songs.len());
+        let taken: Vec<String> = self.songs.iter().map(|s| s.id.clone()).collect();
+        let (songs, broken) = crate::song::load_dirs(&crate::song::user_dirs(), &taken);
+        for s in songs {
+            self.density.push(densities(&s));
+            self.songs.push(Arc::new(s));
+        }
+        self.broken = broken;
+        if let Some(id) = keep {
+            if let Some(i) = self.entry_index(&id) {
+                self.sel = i;
+            }
+        }
+        self.sel = self.sel.min(self.entries().saturating_sub(1));
+        log::info!("{} songs, {} song files with errors", self.songs.len(), self.broken.len());
+    }
+
+    /// Songs and broken files on the list.
+    pub fn entries(&self) -> usize {
+        self.songs.len() + self.broken.len()
+    }
+
+    fn entry_id(&self) -> Option<String> {
+        match self.songs.get(self.sel) {
+            Some(s) => Some(s.id.clone()),
+            None => self.broken.get(self.sel - self.songs.len()).map(|b| b.id.clone()),
+        }
+    }
+
+    fn entry_index(&self, id: &str) -> Option<usize> {
+        self.find(id).or_else(|| self.broken.iter().position(|b| b.id == id).map(|i| i + self.songs.len()))
+    }
+
+    pub fn typing(&self) -> bool {
+        matches!(self.screen, Screen::Edit)
+    }
+
+    /// Open the editor on the chosen entry: a player's song or broken file
+    /// as it is, a built-in song as a copy of the player's own.
+    pub fn edit_selected(&mut self) {
+        let Some(dir) = crate::song::user_dirs().into_iter().next() else {
+            self.say("there is no state folder to keep songs in".into());
+            return;
+        };
+        let ed = if let Some(s) = self.songs.get(self.sel).cloned() {
+            match &s.path {
+                Some(p) => Editor::open(p),
+                None => {
+                    let path = dir.join(format!("{}-mine.song", s.id));
+                    if path.exists() {
+                        Editor::open(&path)
+                    } else {
+                        let text = crate::song::builtin_text(&s.id).unwrap_or(crate::song::TEMPLATE);
+                        let text: String = text
+                            .lines()
+                            .map(|l| if l.starts_with("title ") { format!("title  {} (mine)", s.title) } else { l.to_string() } + "\n")
+                            .collect();
+                        let mut e = Editor::new(path, &text);
+                        e.mark_new();
+                        e.say(format!("your own copy of {}: Ctrl-S keeps it", s.title), false);
+                        Ok(e)
+                    }
+                }
+            }
+        } else if let Some(b) = self.broken.get(self.sel - self.songs.len()) {
+            let path = b.path.clone();
+            Editor::open(&path).map(|mut e| {
+                if let Err(err) = &e.parsed {
+                    e.row = err.line.saturating_sub(1).min(e.lines.len() - 1);
+                }
+                e
+            })
+        } else {
+            return;
+        };
+        match ed {
+            Ok(e) => self.open_editor(e),
+            Err(msg) => self.say(msg),
+        }
+    }
+
+    /// A new song from the template.
+    pub fn new_song(&mut self) {
+        let Some(dir) = crate::song::user_dirs().into_iter().next() else {
+            self.say("there is no state folder to keep songs in".into());
+            return;
+        };
+        let mut e = Editor::new(Editor::new_path(&dir, "my-song"), crate::song::TEMPLATE);
+        e.mark_new();
+        e.say("a new song: Ctrl-S saves it, Ctrl-L listens, Ctrl-P plays it", false);
+        self.open_editor(e);
+    }
+
+    fn open_editor(&mut self, e: Editor) {
+        log::info!("edit {}", e.path.display());
+        self.audio.with(|s| s.stop());
+        self.editor = Some(Box::new(e));
+        self.clock.running = false;
+        self.screen = Screen::Edit;
+    }
+
+    /// Back to the editor after trying the song out.
+    fn to_editor(&mut self) {
+        if let Some(e) = &mut self.editor {
+            e.listening = false;
+        }
+        self.audio.with(|s| s.stop());
+        self.clock.running = false;
+        self.screen = if self.editor.is_some() { Screen::Edit } else { Screen::Select };
+    }
+
+    fn leave_editor(&mut self) {
+        let id = self.editor.take().map(|e| e.id.clone());
+        self.load_user_songs();
+        if let Some(i) = id.and_then(|id| self.entry_index(&id)) {
+            self.sel = i;
+        }
+        self.to_select();
+    }
+
+    fn editor_key(&mut self, k: K) {
+        let Some(ed) = &mut self.editor else { return self.to_select() };
+        // Esc first stops the listening
+        if k == K::Esc && ed.listening {
+            ed.listening = false;
+            self.audio.with(|s| s.stop());
+            return;
+        }
+        match ed.key(k) {
+            Action::None => {}
+            Action::Edited(note) => {
+                ed.changed();
+                ed.reparse();
+                if let Ok(song) = &ed.parsed {
+                    let voice = song.lead;
+                    if ed.listening {
+                        let sc = song.score();
+                        self.audio.with(|s| s.reload(song, &sc));
+                    }
+                    self.audio.with(|s| s.set_voice(voice));
+                }
+                if let Some(m) = note {
+                    self.audio.with(|s| s.note(m, 0.35));
+                }
+            }
+            Action::Save => match ed.save() {
+                Ok(()) => {
+                    let file = ed.path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+                    let dir = ed.path.parent().map(|d| d.display().to_string()).unwrap_or_default();
+                    ed.say(format!("saved {file} in {dir}"), false);
+                }
+                Err(e) => ed.say(e, true),
+            },
+            Action::Listen => {
+                if ed.listening {
+                    ed.listening = false;
+                    self.audio.with(|s| s.stop());
+                } else {
+                    match &ed.parsed {
+                        Ok(song) => {
+                            let sc = song.score();
+                            let from = song.time(sc.sections.get(ed.section_at_cursor()).copied().unwrap_or(0));
+                            self.audio.with(|s| {
+                                s.load(song, &sc, None);
+                                s.preview(from);
+                                s.volume = 1.0;
+                            });
+                            ed.listening = true;
+                        }
+                        Err(e) => {
+                            let m = format!("cannot play it yet: {e}");
+                            ed.say(m, true);
+                        }
+                    }
+                }
+            }
+            Action::Play => match &ed.parsed {
+                Ok(song) => {
+                    let section = ed.section_at_cursor();
+                    let song = Arc::new(song.clone());
+                    ed.listening = false;
+                    self.practice = Some(Practice { song, section, speed: 0, runs: 0, last: None, editor: true });
+                    self.start_practice();
+                }
+                Err(e) => {
+                    let m = format!("cannot play it yet: {e}");
+                    ed.say(m, true);
+                }
+            },
+            Action::Leave => {
+                if ed.dirty && !ed.leave_armed {
+                    ed.leave_armed = true;
+                    ed.say("not saved: Ctrl-S saves it, Esc again leaves without saving", true);
+                } else {
+                    self.leave_editor();
+                }
+            }
+        }
     }
 
     /// Back to the list, with the chosen song playing softly behind it.
@@ -270,7 +488,7 @@ impl App {
         let keep = self.practice.as_ref().is_some_and(|p| p.song.id == song.id && p.section < song.order.len());
         if !keep {
             let section = if song.order.len() > 1 { 1 } else { 0 };
-            self.practice = Some(Practice { song, section, speed: 2, runs: 0, last: None });
+            self.practice = Some(Practice { song, section, speed: 2, runs: 0, last: None, editor: false });
         }
         self.clock.running = false;
         self.screen = Screen::Practice;
@@ -284,7 +502,7 @@ impl App {
         let diff = self.diff;
         let sc = def.score();
         let Some(&first) = sc.sections.get(pr.section) else { return };
-        let next = sc.sections.get(pr.section + 1).copied().unwrap_or(sc.steps);
+        let next = if pr.editor { sc.steps } else { sc.sections.get(pr.section + 1).copied().unwrap_or(sc.steps) };
         let (from, to) = (def.time(first), def.time(next));
         let beat = def.step_secs() * 4.0;
         // a bar of clicks to count in; two when the bar is short
@@ -377,15 +595,23 @@ impl App {
                         self.sfx(Inst::Tick, 0.0);
                         self.to_practice();
                     }
+                    K::Char('e' | 'E') => {
+                        self.sfx(Inst::Tick, 0.0);
+                        self.edit_selected();
+                    }
+                    K::Char('n' | 'N') => {
+                        self.sfx(Inst::Tick, 0.0);
+                        self.new_song();
+                    }
                     k => match nav(k) {
                         Some(Nav::Up) => {
-                            let n = self.songs.len().max(1);
+                            let n = self.entries().max(1);
                             self.sel = (self.sel + n - 1) % n;
                             self.preview();
                             self.sfx(Inst::Tick, 0.0);
                         }
                         Some(Nav::Down) => {
-                            self.sel = (self.sel + 1) % self.songs.len().max(1);
+                            self.sel = (self.sel + 1) % self.entries().max(1);
                             self.preview();
                             self.sfx(Inst::Tick, 0.0);
                         }
@@ -402,6 +628,9 @@ impl App {
                                 self.sfx(Inst::Chime, 84.0);
                                 let d = self.diff;
                                 self.start(def, d);
+                            } else {
+                                // a song file with an error: open it to mend it
+                                self.edit_selected();
                             }
                         }
                         Some(Nav::Back) | Some(Nav::Quit) => self.quit = true,
@@ -432,7 +661,9 @@ impl App {
                             _ => {
                                 let practice = play.practice;
                                 self.audio.with(|s| s.paused = false);
-                                if practice {
+                                if practice && self.practice.as_ref().is_some_and(|p| p.editor) {
+                                    self.to_editor();
+                                } else if practice {
                                     self.to_practice();
                                 } else {
                                     self.to_select();
@@ -493,6 +724,11 @@ impl App {
                     }
                     k if matches!(nav(k), Some(Nav::Ok) | Some(Nav::Back)) => self.to_select(),
                     _ => {}
+                }
+            }
+            Screen::Edit => {
+                if p.down {
+                    self.editor_key(p.key);
                 }
             }
             Screen::Practice => {
@@ -623,7 +859,7 @@ impl App {
                     cal.flash = (raw / p).floor() * p;
                 }
             }
-            Screen::Select | Screen::Practice => {}
+            Screen::Select | Screen::Practice | Screen::Edit => {}
         }
         for c in &cues {
             match *c {
@@ -645,6 +881,11 @@ impl App {
         }
         if finished.is_some() {
             let Screen::Play { play, .. } = std::mem::replace(&mut self.screen, Screen::Select) else { unreachable!() };
+            if play.practice && self.practice.as_ref().is_some_and(|p| p.editor) {
+                log::info!("tried the song from the editor: counts {:?}", play.counts);
+                self.to_editor();
+                return;
+            }
             if play.practice {
                 // round again, straight away
                 if let Some(pr) = &mut self.practice {
@@ -678,6 +919,7 @@ impl App {
     pub fn snapshot(&self) {
         match &self.screen {
             Screen::Select => log::debug!("snapshot: songs, {:?} {} speed {} offset {}", self.songs.get(self.sel).map(|s| &s.id), self.diff.name(), self.settings.speed, self.settings.offset_ms),
+            Screen::Edit => log::debug!("snapshot: edit {:?}", self.editor.as_ref().map(|e| (&e.id, e.row, e.col, e.dirty, e.listening, e.parsed.is_ok()))),
             Screen::Practice => log::debug!("snapshot: practice {:?}", self.practice.as_ref().map(|p| (&p.song.id, p.section, SPEEDS[p.speed]))),
             Screen::Play { play, paused, .. } => log::debug!(
                 "snapshot: play {} {} t {:.2} paused {paused} score {} combo {} groove {:.2} counts {:?} down {:?}",

@@ -24,7 +24,8 @@ start it from av's list. Or build it: `cargo run --release`.
 
 On the song list: **↑ ↓** pick a song, **← →** the difficulty, **Enter**
 play, **[ ]** how fast the notes fall, **- +** the sound offset, **C**
-calibrate, **P** practise, **Esc** quit.
+calibrate, **P** practise, **E** edit a song, **N** write a new one,
+**Esc** quit.
 
 - **Easy:** the melody's notes on the beat; the rest of the tune plays itself.
 - **Normal:** the melody's notes on every eighth.
@@ -39,6 +40,48 @@ meter, and when it runs dry the song is lost.
 tempo from 50% to 100% with **← →** (**Tab** changes the difficulty), and
 **Enter** plays that section round and round, with a count-in, no groove
 meter and no losing. Your accuracy on the last round shows beside the lanes.
+
+## Your own songs
+
+Every song in Bellbeat is a plain text file, and you can write your own.
+Press **N** on the song list for a new one, or **E** on a song to edit it
+(a built-in song opens as your own copy). The editor shows the song file:
+
+```
+title  Night Tune
+bpm    100
+meter  4          beats a bar, 2 to 7 (3 for a waltz)
+swing  50         50 is straight, 66 swings the eighths
+voice  bell       bell, pulse, pluck or flute
+order  intro tune tune
+
+[tune] 4 bars
+chords C Am F G
+lead   C5 - - - E5 - G5 - A5 - - - G5 - - -
+       A5 - - - C6 - - - E6 - D6 - C6 - - -
+harmony ...
+bass   1 - - - . . 1 - 5 - - - . . 5 -
+kick   x... .... x... ....
+```
+
+One token is a sixteenth: a note (`E5`, `F#4`, `Bb3`), `-` to hold it,
+`.` for silence; sixteen make a bar of 4/4. `chords` has one chord a bar,
+and `bass` and `arp` play its degrees (`1 3 5 7 8`). `harmony` is a second
+voice under the melody, your second lane on Hard. A line is one bar, which
+repeats, or the whole section; a line starting with a space carries on the
+one before; `#` starts a comment.
+
+As you type a note on a melody line and press Space you hear it. The
+editor checks the song after every key and says what is wrong and on which
+line. **Ctrl-S** saves, **Ctrl-L** listens from the section the cursor is
+in, **Ctrl-P** plays it from there, **Ctrl-Z** and **Ctrl-Y** undo and redo,
+**Ctrl-D** copies a line and **Ctrl-K** cuts one, **Esc** leaves.
+
+Songs are kept in the `songs` folder in Bellbeat's state folder (below),
+one `.song` file each, named for the song; Bellbeat also reads a `songs`
+folder beside the program. Share a song by sharing its file.
+
+## Calibrate
 
 **Calibrate first.** Sound takes a moment to reach your ears, more with
 Bluetooth headphones. Press C on the song list and tap along to the clicks;

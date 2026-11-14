@@ -11,6 +11,7 @@
 
 mod app;
 mod chart;
+mod editor;
 mod font;
 mod input;
 mod play;
@@ -47,6 +48,7 @@ miss leaves a hole in the tune. Long notes are held.
 On the song list: \u{2191} \u{2193} choose a song, \u{2190} \u{2192} the difficulty, Enter
 play, [ and ] how fast the notes fall, - and + the sound offset, c
 calibrate the offset by tapping along to clicks, p practise a section,
+e edit the song (a built-in one as your own copy), n write a new song,
 Esc quit.
 
 Practice: \u{2191} \u{2193} choose a section, \u{2190} \u{2192} slower or faster, Tab the
@@ -70,6 +72,12 @@ escape-sequence, kernel-panic.
   --fps N                    draw N frames a second (60; the game runs at 120)
   --shot SECS [--size WxH]   play headless on the demo, print the screen
   --bench FRAMES [--size WxH]  time frames without a terminal
+
+The editor: the song file as text. Typing a note on a melody line and a
+space sounds it. Ctrl-S save, Ctrl-L listen from the cursor's section,
+Ctrl-P play from there, Ctrl-Z / Ctrl-Y undo and redo, Ctrl-D copy a line,
+Ctrl-K cut a line, Esc leave. Your songs: the songs folder in the state
+folder, and a songs folder beside the program, one .song file each.
 
 Best scores and settings: $XDG_STATE_HOME/bellbeat (~/.local/state/bellbeat).
 Session log: RUST_LOG=debug bellbeat 2>bellbeat.log";
@@ -129,6 +137,7 @@ fn main() -> io::Result<()> {
     log::info!("start {}x{} kitty_keyboard={kitty} pad={:?} sound device {} offset {} ms speed {}", screen.width, screen.height, input.pad_name, audio.device(), settings.offset_ms, settings.speed);
     let mut app = App::new(audio, settings, save::load_scores(), kitty || input.pad_name.is_some());
     app.demo = demo;
+    app.load_user_songs();
     let song = song_id.and_then(|id| app.find(id));
     if let Some(s) = song {
         app.sel = s;
@@ -203,6 +212,10 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App, input: &mut Input
         if frame % every == 0 {
             terminal.draw(|f| {
                 let area = f.area();
+                if let Some(e) = &mut app.editor {
+                    let (w, h) = ui::editor_text_size(area);
+                    e.scroll(w, h);
+                }
                 ui::draw(app, f.buffer_mut(), area);
             })?;
         }

@@ -15,10 +15,10 @@ own, written as text in `songs/*.song` (built in with `include_str!`) and
 synthesised live. **All music is our own, written for this game**: no
 existing melodies, folk or public-domain ones included.
 
-**Status** (2026-11-14, version 0.6.0): playable end to end. Song list with a
+**Status** (2026-11-14, version 0.7.0): playable end to end. Song list with a
 live preview, three difficulties, play, pause menu, results with grade and
-best score, calibration, practice (a section, slowed down, on repeat). Not
-yet played by David. `ROADMAP.md` has what each release up to 1.0.0 brings.
+best score, calibration, practice (a section, slowed down, on repeat),
+players' own song files and a song editor. Not yet played by David. `ROADMAP.md` has what each release up to 1.0.0 brings.
 Licence MIT. Repo github.com/theasciiverse/bellbeat (public), branch `main`,
 tags `vX.Y.Z`; the release workflow builds every tag (`--locked`, so commit
 Cargo.lock before tagging).
@@ -44,6 +44,14 @@ cargo test
   step with swing. Parsing checks everything with line numbers and never
   panics (a fuzz test mutates the songs), so a parsed song always plays.
 - `songs/*.song`: the built-in songs, gentlest first in `BUILTIN`.
+  Players' songs: `load_dirs` reads `*.song` from `<state>/songs` and
+  `songs` beside the binary (size checked before reading, UTF-8 or an
+  error, the id from the file name made safe, a taken id is an error);
+  files that fail are `Broken` and listed with their error.
+- `src/editor.rs`: the song editor, text in lines of chars, undo in runs,
+  `Action`s for the app (save, listen, play, leave, a typed note to sound).
+  `App::editor` keeps it while the song is tried out (practice with
+  `editor: true`: from the cursor's section to the end, once, then back).
 - `src/chart.rs`: the melody (and on Hard the chords and snare) to lanes. A
   note's lane follows the tune's shape: higher to the right, and a step up
   or down never stays in the lane before. Melody notes of half a bar or
@@ -75,7 +83,9 @@ cargo test
   notes` log of judgements with note names and offsets; menus.
 - `src/input.rs`: D F J K or arrows; pad d-pad, X A Y B, LB LT RT RB, all in
   lane order. Without the kitty protocol a key's repeats arrive as presses:
-  a key pressed again within 60 ms of its last event is ignored.
+  a key pressed again within 60 ms of its last event is ignored, except
+  while typing in the editor (`Input::typing`). Ctrl and a letter is
+  `K::Ctrl`; the kitty flags include alternate keys, so Shift gives `#`.
 - `src/save.rs`: `scores` and `settings` as text in the state folder
   (`BELLBEAT_STATE` overrides it, for tests).
 - `src/font.rs`: Braillestorm's 5x7 font in half blocks, for the title and
@@ -90,13 +100,15 @@ Layout: drawn for 100x30, plays at 80x24 (lanes 7 wide) and down to about
 
 ## Preview
 
-`asciiverse/record-preview.sh`: the demo on Kernel Panic, Hard, muted, with
+`asciiverse/record-preview.sh`: the demo on Escape Sequence, Hard, muted, with
 hub's `castrec.py`; the demo skips the kitty keyboard query, which a recorder
 never answers.
 
 ## Not done yet
 
 - Not played by a person yet (only the demo, tmux and the tests).
+- The editor tried in tmux only: Shift in kitty-protocol terminals relies
+  on the alternate-keys flag, untested on a real kitty or WezTerm.
 - No real-device latency check beyond calibration: rodio's buffer is absorbed
   by the offset.
 - macOS and Windows built by the workflow only.

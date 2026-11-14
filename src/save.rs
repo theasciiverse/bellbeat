@@ -14,6 +14,10 @@ pub fn dir() -> Option<PathBuf> {
     if let Some(d) = env("BELLBEAT_STATE") {
         return Some(d);
     }
+    // tests never touch the player's own folder
+    if cfg!(test) {
+        return None;
+    }
     let base = if cfg!(windows) {
         env("LOCALAPPDATA")
     } else if cfg!(target_os = "macos") {

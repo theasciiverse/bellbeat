@@ -40,6 +40,7 @@
 //! scored, charted and played.
 
 use std::fmt;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Lead {
@@ -109,6 +110,8 @@ pub struct Song {
     pub order: Vec<usize>,
     /// One of the songs that come with the game.
     pub builtin: bool,
+    /// The file a player's song came from.
+    pub path: Option<PathBuf>,
 }
 
 /// What is wrong with a song file, and where.
@@ -163,6 +166,154 @@ pub fn builtins() -> Vec<Song> {
             }
         })
         .collect()
+}
+
+// ------------------------------------------------------------------ players' songs
+
+/// A song file that did not parse, kept so the list can show what is wrong
+/// and the editor can open it.
+#[derive(Clone, Debug)]
+pub struct Broken {
+    pub id: String,
+    pub path: PathBuf,
+    pub err: SongError,
+}
+
+/// Song files are `<id>.song`; the id is the file name, made safe for the
+/// scores file: lower case, letters, digits and dashes.
+pub fn id_from_path(p: &Path) -> String {
+    let stem = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let mut id = String::new();
+    for c in stem.chars().flat_map(char::to_lowercase) {
+        if c.is_alphanumeric() {
+            id.push(c);
+        } else if !id.ends_with('-') {
+            id.push('-');
+        }
+    }
+    let id = id.trim_matches('-').chars().take(60).collect::<String>();
+    if id.is_empty() {
+        "song".into()
+    } else {
+        id
+    }
+}
+
+/// Read one song file, defensively: its size first, then its text.
+pub fn load_file(path: &Path) -> Result<Song, SongError> {
+    let meta = std::fs::metadata(path).map_err(|e| SongError { line: 0, msg: format!("cannot read it: {e}") })?;
+    if meta.len() > MAX_FILE {
+        return err(0, format!("the file is too long (more than {} KB)", MAX_FILE / 1024));
+    }
+    let bytes = std::fs::read(path).map_err(|e| SongError { line: 0, msg: format!("cannot read it: {e}") })?;
+    let text = String::from_utf8(bytes).map_err(|_| SongError { line: 0, msg: "this is not UTF-8 text".into() })?;
+    let mut s = parse(&text, &id_from_path(path))?;
+    s.path = Some(path.to_path_buf());
+    Ok(s)
+}
+
+/// The most song files read from one folder.
+const MAX_FILES: usize = 500;
+
+/// Every `*.song` in the folders, in name order: the songs that parse, and
+/// the ones that do not. A name already taken (by a built-in song, or by
+/// a file read before) is an error of its own.
+pub fn load_dirs(dirs: &[PathBuf], taken: &[String]) -> (Vec<Song>, Vec<Broken>) {
+    let mut songs: Vec<Song> = Vec::new();
+    let mut broken = Vec::new();
+    for dir in dirs {
+        let Ok(rd) = std::fs::read_dir(dir) else { continue };
+        let mut files: Vec<PathBuf> = rd
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("song")) && p.is_file())
+            .collect();
+        files.sort();
+        if files.len() > MAX_FILES {
+            log::warn!("{}: {} song files, reading the first {MAX_FILES}", dir.display(), files.len());
+            files.truncate(MAX_FILES);
+        }
+        for path in files {
+            let id = id_from_path(&path);
+            if taken.contains(&id) || songs.iter().any(|s| s.id == id) || broken.iter().any(|b: &Broken| b.id == id) {
+                let msg = format!("there is already a song called `{id}`; give this file another name");
+                broken.push(Broken { id: format!("{id}?"), path, err: SongError { line: 0, msg } });
+                continue;
+            }
+            match load_file(&path) {
+                Ok(s) => {
+                    log::info!("song {} from {}", s.id, path.display());
+                    songs.push(s);
+                }
+                Err(e) => {
+                    log::warn!("song file {}: {e}", path.display());
+                    broken.push(Broken { id, path, err: e });
+                }
+            }
+        }
+    }
+    (songs, broken)
+}
+
+/// Where players' songs are read from: `songs` in the state folder, and
+/// `songs` beside the program.
+pub fn user_dirs() -> Vec<PathBuf> {
+    let mut v = Vec::new();
+    if let Some(d) = crate::save::dir() {
+        v.push(d.join("songs"));
+    }
+    if !cfg!(test) {
+        if let Some(d) = std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.join("songs"))) {
+            if !v.contains(&d) {
+                v.push(d);
+            }
+        }
+    }
+    v
+}
+
+/// The song the editor starts a new file with: a little tune of our own,
+/// and the notation in comments.
+pub const TEMPLATE: &str = "# A Bellbeat song. Lines starting with # are notes to yourself.
+#
+# Notes: E5, F#4, Bb3 (C4 is middle C). One token is a sixteenth:
+# a note, - to hold the note before, . for silence. Sixteen make a bar
+# of 4/4 (twelve in 3/4). Each line is one bar, repeated, or the whole
+# section. A line starting with a space carries on the line before.
+# bass and arp are chord degrees: 1 3 5 7 8. Drums: x hits, . rests.
+# The file name is the song's name on the scores.
+
+title  My Song
+blurb  A tune of my own.
+bpm    100
+meter  4
+swing  50
+voice  bell
+order  intro tune tune
+
+[intro] 1 bar
+chords C
+bass   1 - - - . . . . 5 - - - . . . .
+kick   x... .... x... ....
+hat    ..x. ..x. ..x. ..x.
+
+[tune] 4 bars
+chords C Am F G
+lead   C5 - - - E5 - G5 - A5 - - - G5 - - -
+       A5 - - - C6 - - - E6 - D6 - C6 - - -
+       F5 - A5 - C6 - - - A5 - G5 - F5 - - -
+       G5 - - - B5 - - - D6 - - - - - - -
+harmony . . . . . . . . . . . . . . . .
+bass   1 - - - . . 1 - 5 - - - . . 5 -
+arp    1 . 3 . 5 . 8 . 5 . 3 . 5 . 8 .
+kick   x... .... x... ....
+snare  .... x... .... x...
+hat    x.x. x.x. x.x. x.x.
+";
+
+/// A built-in song's text, for the editor to start a copy from.
+pub fn builtin_text(id: &str) -> Option<&'static str> {
+    BUILTIN.iter().find(|(i, _)| *i == id).map(|(_, t)| *t)
 }
 
 // ------------------------------------------------------------------ notes
@@ -430,7 +581,7 @@ pub fn parse(text: &str, id: &str) -> Result<Song, SongError> {
                 for c in e.value.split_whitespace() {
                     match parse_chord(c) {
                         Some(ch) => v.push(ch),
-                        None => return err(e.line, format!("`{c}` is not a chord here: a root (C, F#, Bb) and one of m, 7, m7, maj7, sus2, sus4, dim, 6, or nothing")),
+                        None => return err(e.line, format!("`{c}` is not a chord: a root (C, F#, Bb), then m, 7, m7, maj7, sus2, sus4, dim, 6 or nothing")),
                     }
                 }
                 if v.is_empty() {
@@ -508,7 +659,7 @@ pub fn parse(text: &str, id: &str) -> Result<Song, SongError> {
             hat: drums("hat")?,
         });
     }
-    let song = Song { id: id.to_string(), title, blurb, bpm, meter, swing, lead, sections, order, builtin: false };
+    let song = Song { id: id.to_string(), title, blurb, bpm, meter, swing, lead, sections, order, builtin: false, path: None };
     let secs = song.secs();
     if secs > MAX_SECS {
         return err(get("order").map_or(1, |e| e.line), format!("the song lasts {:.0} s; ten minutes at most", secs));
@@ -712,6 +863,37 @@ mod tests {
         assert!((s.time(4) - 1.0).abs() < 1e-9);
         assert!((s.time(2) - 2.0 / 3.0).abs() < 1e-6);
         assert!(s.time(1) < s.time(2) && s.time(2) < s.time(3) && s.time(3) < s.time(4));
+    }
+
+    #[test]
+    fn the_template_parses_and_ids_are_safe() {
+        let s = parse(TEMPLATE, "my-song").unwrap();
+        assert_eq!(s.title, "My Song");
+        assert_eq!(id_from_path(Path::new("/x/My Great Song!.song")), "my-great-song");
+        assert_eq!(id_from_path(Path::new("/x/...song")), "song");
+        assert_eq!(id_from_path(Path::new("/x/a b\tc.song")), "a-b-c");
+    }
+
+    #[test]
+    fn a_folder_of_songs_loads_the_good_and_names_the_bad() {
+        let dir = std::env::temp_dir().join(format!("bellbeat-songs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("good.song"), TEMPLATE).unwrap();
+        std::fs::write(dir.join("bad.song"), TEMPLATE.replace("bpm    100", "bpm    fast")).unwrap();
+        std::fs::write(dir.join("hello-world.song"), TEMPLATE).unwrap();
+        std::fs::write(dir.join("binary.song"), [0xffu8, 0xfe, 0x00, 0x41]).unwrap();
+        std::fs::write(dir.join("notes.txt"), "not a song").unwrap();
+        let (songs, broken) = load_dirs(&[dir.clone(), dir.join("missing")], &["hello-world".into()]);
+        assert_eq!(songs.len(), 1);
+        assert_eq!(songs[0].id, "good");
+        assert_eq!(songs[0].path.as_deref(), Some(dir.join("good.song").as_path()));
+        assert_eq!(broken.len(), 3, "{broken:?}");
+        let bad = broken.iter().find(|b| b.id == "bad").unwrap();
+        assert!(bad.err.line > 0 && bad.err.msg.contains("bpm"), "{}", bad.err);
+        assert!(broken.iter().any(|b| b.err.msg.contains("UTF-8")));
+        assert!(broken.iter().any(|b| b.err.msg.contains("already")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     const SMALL: &str = "title  Small\nbpm 120\n\n[a] 2 bars\nchords C G\nlead   C5 - D5 - E5 - F5 - G5 - A5 - B5 - C6 -\nkick x... x... x... x...\n";

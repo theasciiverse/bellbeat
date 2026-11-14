@@ -5,7 +5,8 @@
 //! notes fall smoothly by half rows. The scope beside them draws the very
 //! samples the synth just made, in Braille.
 
-use crate::app::{App, Cal, Screen, CAL_TAPS, PAUSE_ITEMS, PRACTICE_PAUSE_ITEMS, SPEEDS};
+use crate::app::{App, Cal, Screen, CAL_TAPS, EDITOR_PAUSE_ITEMS, PAUSE_ITEMS, PRACTICE_PAUSE_ITEMS, SPEEDS};
+use crate::editor::Editor;
 use crate::chart::{Difficulty, Sound, LANES};
 use crate::font;
 use crate::play::{Hold, Judge, Play};
@@ -120,12 +121,24 @@ pub fn draw(app: &App, buf: &mut Buffer, area: Rect) {
         Screen::Play { play, paused, item, .. } => {
             draw_play(app, play, buf, area);
             if *paused {
-                draw_pause(buf, area, *item, play.practice);
+                let items = if !play.practice {
+                    PAUSE_ITEMS
+                } else if app.practice.as_ref().is_some_and(|p| p.editor) {
+                    EDITOR_PAUSE_ITEMS
+                } else {
+                    PRACTICE_PAUSE_ITEMS
+                };
+                draw_pause(buf, area, *item, items);
             }
         }
         Screen::Results { play, new_best, shown } => draw_results(app, play, *new_best, shown.elapsed().as_secs_f64(), buf, area),
         Screen::Calibrate(cal) => draw_calibrate(app, cal, buf, area),
         Screen::Practice => draw_practice(app, buf, area),
+        Screen::Edit => {
+            if let Some(e) = &app.editor {
+                draw_editor(app, e, buf, area);
+            }
+        }
     }
 }
 
@@ -492,7 +505,8 @@ fn draw_play(app: &App, play: &Play, buf: &mut Buffer, area: Rect) {
         if play.practice {
             if let Some(pr) = &app.practice {
                 let name = pr.parts().get(pr.section).map(|p| p.0.clone()).unwrap_or_default();
-                put(buf, l, l.x + 1, y - 1, &format!("practice {name} {:.0}%", SPEEDS[pr.speed] * 100.0), AMBER);
+                let what = if pr.editor { format!("trying it from {name}") } else { format!("practice {name} {:.0}%", SPEEDS[pr.speed] * 100.0) };
+                put(buf, l, l.x + 1, y - 1, &what, AMBER);
                 y += 1;
             }
         }
@@ -512,7 +526,7 @@ fn draw_play(app: &App, play: &Play, buf: &mut Buffer, area: Rect) {
             y += 4;
         }
         if play.practice {
-            if let (Some(pr), true) = (&app.practice, y + 1 < l.bottom()) {
+            if let (Some(pr), true) = (app.practice.as_ref().filter(|p| !p.editor), y + 1 < l.bottom()) {
                 put(buf, l, l.x + 1, y, &format!("round {}", pr.runs + 1), TEXT);
                 if let Some(a) = pr.last {
                     put(buf, l, l.x + 1, y + 1, &format!("last  {:.1}%", a * 100.0), DIM);
@@ -569,13 +583,12 @@ fn draw_play(app: &App, play: &Play, buf: &mut Buffer, area: Rect) {
     }
 }
 
-fn draw_pause(buf: &mut Buffer, area: Rect, item: usize, practice: bool) {
+fn draw_pause(buf: &mut Buffer, area: Rect, item: usize, items: [&str; 3]) {
     let w = 28.min(area.width);
     let h = 7.min(area.height);
     let r = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
     fill(buf, r, Color::Rgb(16, 24, 20));
     centre(buf, r, r.y + 1, "paused", AMBER);
-    let items = if practice { PRACTICE_PAUSE_ITEMS } else { PAUSE_ITEMS };
     for (i, s) in items.iter().enumerate() {
         let sel = i == item;
         let text = if sel { format!("\u{25b8} {s}") } else { format!("  {s}") };
@@ -606,13 +619,12 @@ fn draw_select(app: &App, buf: &mut Buffer, area: Rect) {
     // the list scrolls when it is longer than the room for it
     let below = 10;
     let room = area.bottom().saturating_sub(y + below).max(3) as usize;
-    let n = app.songs.len();
+    let n = app.entries();
     let rows = n.min(room);
     let first = if app.sel < rows / 2 { 0 } else { (app.sel - rows / 2).min(n - rows) };
     let list = Rect::new(lx, y, lw, rows as u16);
     let d = app.diff;
     for (row_i, i) in (first..first + rows).enumerate() {
-        let s = &app.songs[i];
         let sel = i == app.sel;
         let row = y + row_i as u16;
         if row >= area.bottom() {
@@ -623,6 +635,19 @@ fn draw_select(app: &App, buf: &mut Buffer, area: Rect) {
                 buf[(x, row)].set_bg(Color::Rgb(20, 40, 30));
             }
         }
+        let Some(s) = app.songs.get(i) else {
+            // a song file with an error
+            if let Some(b) = app.broken.get(i - app.songs.len()) {
+                put(buf, list, lx, row, if sel { "\u{25b8}" } else { " " }, AMBER);
+                let name = b.path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+                let name: String = name.chars().filter(|c| !c.is_control()).take(lw.saturating_sub(24) as usize).collect();
+                put(buf, list, lx + 2, row, &name, if sel { BRIGHT } else { DIM });
+                let tag = "has an error  Enter mends it";
+                put(buf, list, list.right().saturating_sub(tag.len() as u16), row, tag, RED);
+            }
+            continue;
+        };
+        let user = if s.builtin { "" } else { " \u{270e}" };
         let fg = if sel { BRIGHT } else { TEXT };
         let marker = if sel {
             "\u{25b8}"
@@ -632,14 +657,15 @@ fn draw_select(app: &App, buf: &mut Buffer, area: Rect) {
             " "
         };
         put(buf, list, lx, row, marker, AMBER);
-        put(buf, list, lx + 2, row, &s.title, fg);
+        let x = put(buf, list, lx + 2, row, &s.title, fg);
+        put(buf, list, x, row, user, DIM);
         let st = stars(app.density.get(i).map_or(0.0, |x| x[d.index()]));
         let star: String = (0..5).map(|k| if k < st { '\u{2605}' } else { '\u{2606}' }).collect();
         let meter = if s.meter != 4 { format!("{}/4", s.meter) } else if s.swing > 0.55 { "swing".into() } else { String::new() };
         let info = format!("{meter:>5} {:>3.0} bpm  {}  {}", s.bpm, mmss(s.secs()), star);
         let best = app.best(&s.id, d).map(|b| format!("  {} {:>9}{}", b.grade, thousands(b.score), if b.full_combo { "\u{2713}" } else { " " })).unwrap_or_else(|| format!("  {:>12}", "-"));
         // as much of it as there is room for: the best score goes first
-        let title_end = lx + 3 + s.title.chars().count() as u16;
+        let title_end = lx + 3 + s.title.chars().count() as u16 + user.chars().count() as u16;
         let full = list.right().saturating_sub((info.chars().count() + best.chars().count()) as u16);
         let short = list.right().saturating_sub(info.chars().count() as u16);
         if full > title_end {
@@ -652,6 +678,9 @@ fn draw_select(app: &App, buf: &mut Buffer, area: Rect) {
     y += rows as u16 + 1;
     if let Some(s) = app.songs.get(app.sel) {
         centre(buf, area, y, &s.blurb, DIM);
+    } else if let Some(b) = app.sel.checked_sub(app.songs.len()).and_then(|i| app.broken.get(i)) {
+        let msg: String = b.err.to_string().chars().take(area.width.saturating_sub(4) as usize).collect();
+        centre(buf, area, y, &msg, RED);
     }
     y += 2;
     // the difficulty
@@ -684,7 +713,7 @@ fn draw_select(app: &App, buf: &mut Buffer, area: Rect) {
         centre(buf, area, y + 1, &format!("play with {keys}"), DIM);
     }
     if y + 2 < area.bottom() {
-        centre(buf, area, y + 2, "Enter play   \u{2191}\u{2193} song   \u{2190}\u{2192} difficulty   p practise   Esc quit", DIM);
+        centre(buf, area, y + 2, "Enter play  \u{2191}\u{2193} song  \u{2190}\u{2192} difficulty  p practise  e edit  n new song  Esc quit", DIM);
     }
     if let Some((s, at)) = &app.note {
         if at.elapsed().as_secs_f64() < 2.0 {
@@ -750,6 +779,155 @@ fn draw_practice(app: &App, buf: &mut Buffer, area: Rect) {
     if y < area.bottom() {
         centre(buf, area, area.bottom() - 1, "Enter play  \u{2191}\u{2193} section  \u{2190}\u{2192} tempo  Tab difficulty  Esc back", DIM);
     }
+}
+
+/// What a token in a song file is, for its colour.
+fn token_colour(word: &str, first: bool, key: Option<&str>) -> Color {
+    if first {
+        return AMBER;
+    }
+    match word {
+        "-" => Color::Rgb(90, 120, 105),
+        "." => Color::Rgb(55, 70, 62),
+        _ => match key {
+            Some("lead") if crate::song::parse_note(word).is_some() => BRIGHT,
+            Some("harmony") if crate::song::parse_note(word).is_some() => Color::Rgb(120, 220, 255),
+            Some("kick" | "snare" | "hat") => Color::Rgb(255, 150, 120),
+            Some("chords") => GREEN,
+            _ => TEXT,
+        },
+    }
+}
+
+/// The editor's text area for a screen: columns and rows.
+pub fn editor_text_size(area: Rect) -> (usize, usize) {
+    (area.width.saturating_sub(6) as usize, area.height.saturating_sub(4) as usize)
+}
+
+fn draw_editor(app: &App, e: &Editor, buf: &mut Buffer, area: Rect) {
+    if area.height < 8 || area.width < 30 {
+        centre(buf, area, area.y, "the editor needs 30x8 at least", AMBER);
+        return;
+    }
+    // the header
+    let file = e.path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+    let title = match &e.parsed {
+        Ok(s) => s.title.clone(),
+        Err(_) => e.id.clone(),
+    };
+    let x = put(buf, area, area.x + 1, area.y, "\u{2407} EDIT  ", AMBER);
+    let x = put(buf, area, x, area.y, &title, BRIGHT);
+    let x = put(buf, area, x + 2, area.y, &file, DIM);
+    if e.dirty {
+        put(buf, area, x + 2, area.y, "not saved", AMBER);
+    }
+    if e.listening {
+        let s = "\u{266a} listening";
+        put(buf, area, area.right().saturating_sub(s.chars().count() as u16 + 1), area.y, s, GREEN);
+    }
+    // the text, with line numbers
+    let gutter = 5u16;
+    let text_top = area.y + 1;
+    let text_h = area.height.saturating_sub(4);
+    let text_w = area.width.saturating_sub(gutter + 1);
+    let err_line = e.parsed.as_ref().err().map(|x| x.line).filter(|l| *l > 0);
+    let mut key: Option<String> = None;
+    // the key in force at the first line shown
+    for l in &e.lines[..e.top.min(e.lines.len())] {
+        let t: String = l.iter().collect();
+        if t.trim().is_empty() || t.trim_start().starts_with('#') {
+            continue;
+        }
+        if !t.starts_with(' ') {
+            key = t.split_whitespace().next().map(|w| w.to_ascii_lowercase());
+        }
+    }
+    for r in 0..text_h as usize {
+        let li = e.top + r;
+        let y = text_top + r as u16;
+        let Some(line) = e.lines.get(li) else { break };
+        let is_err = err_line == Some(li + 1);
+        put(buf, area, area.x, y, &format!("{:>4}", li + 1), if is_err { RED } else { Color::Rgb(50, 66, 58) });
+        if is_err {
+            buf[(area.x + 4, y)].set_symbol("\u{25b8}").set_fg(RED);
+        }
+        let t: String = line.iter().collect();
+        let comment = t.trim_start().starts_with('#');
+        let header = t.trim_start().starts_with('[');
+        if !comment && !t.trim().is_empty() && !t.starts_with(' ') {
+            key = t.split_whitespace().next().map(|w| w.to_ascii_lowercase());
+        }
+        // colour word by word
+        let mut colours = vec![TEXT; line.len()];
+        if comment {
+            colours.fill(DIM);
+        } else if header {
+            colours.fill(AMBER);
+        } else {
+            let mut i = 0;
+            let mut first = !t.starts_with(' ');
+            while i < line.len() {
+                if line[i].is_whitespace() {
+                    i += 1;
+                    continue;
+                }
+                let j = (i..line.len()).find(|&j| line[j].is_whitespace()).unwrap_or(line.len());
+                let w: String = line[i..j].iter().collect();
+                let c = token_colour(&w, first, key.as_deref());
+                colours[i..j].fill(c);
+                first = false;
+                i = j;
+            }
+        }
+        for cx in 0..text_w as usize {
+            let ci = e.left + cx;
+            let x = area.x + gutter + cx as u16;
+            let cursor = li == e.row && ci == e.col.min(line.len());
+            if let Some(&ch) = line.get(ci) {
+                let mut tmp = [0u8; 4];
+                buf[(x, y)].set_symbol(ch.encode_utf8(&mut tmp)).set_fg(colours[ci]);
+            }
+            if cursor {
+                buf[(x, y)].set_bg(AMBER).set_fg(BG);
+            }
+        }
+        if e.left > 0 && !line.is_empty() {
+            buf[(area.x + gutter, y)].set_symbol("\u{2039}").set_fg(DIM);
+        }
+    }
+    // the status lines
+    let sy = area.bottom() - 3;
+    for x in area.x..area.right() {
+        buf[(x, sy)].set_symbol("\u{2500}").set_fg(Color::Rgb(30, 44, 38));
+    }
+    let w = area.width.saturating_sub(2) as usize;
+    let clip = |s: String| -> String { s.chars().take(w).collect() };
+    match &e.message {
+        Some((m, bad, at)) if at.elapsed().as_secs_f64() < 4.0 => {
+            put(buf, area, area.x + 1, sy + 1, &clip(m.clone()), if *bad { RED } else { GREEN });
+        }
+        _ => match &e.parsed {
+            Ok(s) => {
+                let sc = s.score();
+                let hard = crate::chart::build(s, &sc, Difficulty::Hard).notes.len();
+                let feel = if s.swing > 0.55 { format!(", swing {:.0}", s.swing * 100.0) } else { String::new() };
+                let m = format!("\u{2713} {}/4, {:.0} bpm{feel}, {}, {} melody notes, {hard} to play on Hard", s.meter, s.bpm, mmss(s.secs()), sc.lead.len());
+                put(buf, area, area.x + 1, sy + 1, &clip(m), GREEN);
+            }
+            Err(err) => {
+                put(buf, area, area.x + 1, sy + 1, &clip(format!("\u{2717} {err}")), RED);
+            }
+        },
+    }
+    let help = if area.width >= 96 {
+        "Ctrl-S save  Ctrl-L listen  Ctrl-P play from here  Ctrl-Z undo  Ctrl-D/K copy/cut line  Esc leave"
+    } else if area.width >= 72 {
+        "^S save  ^L listen  ^P play from here  ^Z undo  ^D/^K copy/cut line  Esc leave"
+    } else {
+        "^S save  ^L listen  ^P play  ^Z undo  Esc leave"
+    };
+    let _ = app;
+    put(buf, area, area.x + 1, sy + 2, &clip(help.into()), DIM);
 }
 
 fn grade_colour(g: &str) -> Color {
@@ -906,8 +1084,14 @@ mod tests {
             Screen::Results { play: Box::new(p), new_best: true, shown: std::time::Instant::now() },
             Screen::Calibrate(Cal { bpm: 100.0, taps: vec![0.02, 0.04, -0.01], flash: 0.0, done: false }),
             Screen::Practice,
+            Screen::Edit,
         ];
-        app.practice = Some(crate::app::Practice { song: app.songs[8].clone(), section: 2, speed: 3, runs: 2, last: Some(0.9) });
+        let mut ed = Editor::new(std::path::PathBuf::from("/nowhere/a.song"), crate::song::TEMPLATE);
+        ed.row = 20;
+        ed.col = 30;
+        ed.scroll(50, 10);
+        app.editor = Some(Box::new(ed));
+        app.practice = Some(crate::app::Practice { song: app.songs[8].clone(), section: 2, speed: 3, runs: 2, last: Some(0.9), editor: false });
         for (i, s) in screens.into_iter().enumerate() {
             app.screen = s;
             for (w, h) in [(60, 20), (80, 24), (100, 30), (160, 50)] {

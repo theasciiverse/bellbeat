@@ -29,11 +29,16 @@ unfinished, 1.0.0 when everything planned is in.
   players
 - A lost song goes on to its results again (the clock stopped with the music)
 
-## 0.7.0: the song file
+## 0.7.0 (2026-11-14): the song file
 
-- Songs as text files beside the binary (the same notation as `song.rs`),
-  so players can write their own; a folder in the state directory for them
-- A song editor in the terminal: type the melody, hear it, play it
+- Players' songs as `.song` text files, in the built-in songs' notation:
+  read from `songs` in the state folder and `songs` beside the program,
+  checked with line-numbered errors; a broken file shows on the list with
+  its error and opens in the editor to be mended
+- A song editor in the terminal (N new, E edit; a built-in song opens as
+  the player's own copy): the song as coloured text, every note sounding as
+  it is typed, the song checked after every key, listen from the cursor's
+  section, play from there, undo, save
 
 ## 1.0.0
 

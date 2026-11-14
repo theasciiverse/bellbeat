@@ -436,6 +436,27 @@ impl Synth {
         self.add(v);
     }
 
+    /// Load a changed song and carry on from where the preview is (the
+    /// editor, while listening).
+    pub fn reload(&mut self, song: &Song, score: &Score) {
+        let pos = self.pos;
+        let mode = self.mode;
+        self.load(song, score, None);
+        self.mode = mode;
+        self.pos = pos;
+        self.next = self.events.partition_point(|e| e.at < pos);
+    }
+
+    /// A note of the song's voice, now (the editor, as notes are typed).
+    pub fn note(&mut self, midi: i32, secs: f32) {
+        let v = Voice::new(Inst::Lead(self.lead), midi as f32, (secs * SRF) as u32, lead_volume(self.lead));
+        self.add(v);
+    }
+
+    pub fn set_voice(&mut self, lead: Lead) {
+        self.lead = lead;
+    }
+
     /// The player let go of a held note.
     pub fn release(&mut self, sound: Sound) {
         if matches!(sound, Sound::Lead(_) | Sound::Harmony(_)) {
