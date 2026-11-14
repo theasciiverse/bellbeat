@@ -1,0 +1,62 @@
+# Escape Sequence: a Bellbeat song, our own.
+
+title  Escape Sequence
+blurb  One byte, and the whole screen does as it is told.
+bpm    138
+voice  pulse
+order  intro verse chorus verse chorus chorus outro
+
+[intro] 4 bars
+chords A E F#m D
+bass   1 . 1 . 8 . 1 . 1 . 1 . 8 . 1 .
+arp    1 5 8 5 3 5 8 5 1 5 8 5 3 5 8 5
+kick   x... x... x... x...
+hat    ..x. ..x. ..x. ..x.
+
+[verse] 8 bars
+chords A E F#m D A E F#m D
+lead   E5 . A5 . C#6 - B5 - A5 . E5 . A5 - - -
+       G#5 - B5 - E6 - - - D#6 - E6 - B5 - - -
+       C#6 . A5 . F#5 - A5 - C#6 - E6 - F#6 - - -
+       F#6 - E6 - D6 - A5 - F#5 - - - A5 - B5 -
+       C#6 . E6 . A6 - - - G#6 - E6 - C#6 - - -
+       B5 - - - G#5 - B5 - E6 - - - - - - -
+       A5 . C#6 . F#6 - E6 - C#6 - A5 - F#5 - A5 -
+       D6 - - - C#6 - - - B5 - - - E5 - - -
+bass   1 . 1 . 8 . 1 . 1 . 1 . 8 . 1 .
+kick   x... x... x... x...
+snare  .... x... .... x...
+hat    ..x. ..x. ..x. ..x.
+
+[chorus] 8 bars
+chords D E C#m F#m D E A A
+lead   A6 - - - F#6 - - - D6 - F#6 - A6 - - -
+       G#6 - - - E6 - - - B5 - E6 - G#6 - - -
+       E6 - - - C#6 - E6 - G#6 - - - E6 - - -
+       F#6 - - - - - - - . . C#6 - E6 - F#6 -
+       A6 - F#6 - D6 - F#6 - A6 - - - B6 - A6 -
+       G#6 - - - E6 - - - B5 - - - G#5 - - -
+       A5 . C#6 . E6 . A6 . E6 . C#6 . A5 . E5 .
+       A5 - - - - - - - - - - - . . . .
+harmony F#6 - - - D6 - - - A5 - D6 - F#6 - - -
+       E6 - - - B5 - - - G#5 - B5 - E6 - - -
+       C#6 - - - G#5 - C#6 - E6 - - - C#6 - - -
+       C#6 - - - - - - - . . A5 - C#6 - C#6 -
+       F#6 - D6 - A5 - D6 - F#6 - - - F#6 - F#6 -
+       E6 - - - B5 - - - G#5 - - - E5 - - -
+       . . . . . . . . . . . . . . . .
+       E5 - - - - - - - - - - - . . . .
+bass   1 . 1 . 8 . 1 . 1 . 1 . 8 . 1 .
+arp    1 5 8 5 3 5 8 5 1 5 8 5 3 5 8 5
+kick   x... x... x... x...
+snare  .... x... .... x...
+hat    x.xx x.xx x.xx x.xx
+
+[outro] 2 bars
+chords D A
+lead   F#6 - E6 - D6 - C#6 - B5 - A5 - E5 - - -
+       A5 - - - - - - - - - - - . . . .
+bass   1 . 1 . 8 . 1 . 1 - - - - - - -
+kick   x... x... x... x...
+snare  .... x... .... ....
+hat    x.xx x.xx x... ....

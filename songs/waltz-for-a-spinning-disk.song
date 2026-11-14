@@ -1,0 +1,77 @@
+# Waltz for a Spinning Disk: a Bellbeat song, our own.
+# In 3/4: twelve sixteenths a bar, one, two, three.
+
+title  Waltz for a Spinning Disk
+blurb  Seventy-two hundred turns a minute, and every one of them a waltz.
+bpm    144
+meter  3
+voice  bell
+order  intro verse chorus verse bridge chorus outro
+
+[intro] 2 bars
+chords G D
+bass   1 - - - . . . . . . . .
+arp    . . . . 5 . . . 8 . . .
+kick   x... .... ....
+hat    .... x... x...
+
+[verse] 8 bars
+chords G Em C D G Em Am D
+lead   D5 - - - G5 - - - B5 - - -
+       E6 - - - - - - - D6 - - -
+       C6 - - - B5 - - - A5 - - -
+       A5 - - - - - - - F#5 - - -
+       D5 - - - G5 - - - B5 - - -
+       G6 - - - - - - - E6 - D6 -
+       C6 - - - E6 - - - A5 - - -
+       D6 - - - - - - - - - - -
+bass   1 - - - . . . . . . . .
+arp    . . . . 5 . . . 8 . . .
+kick   x... .... ....
+hat    .... x... x...
+
+[chorus] 8 bars
+chords C D Bm Em C D G G
+lead   E6 - - - - - G6 - E6 - - -
+       D6 - - - - - - - A5 - - -
+       F#6 - - - - - D6 - B5 - - -
+       G6 - - - - - - - E6 - - -
+       C6 - - - E6 - - - G6 - - -
+       F#6 - - - E6 - - - D6 - C6 -
+       B5 - - - D6 - - - G5 - - -
+       G5 - - - - - - - - - - -
+harmony C6 - - - - - E6 - C6 - - -
+       A5 - - - - - - - F#5 - - -
+       D6 - - - - - B5 - F#5 - - -
+       E6 - - - - - - - B5 - - -
+       G5 - - - C6 - - - E6 - - -
+       A5 - - - A5 - - - F#5 - F#5 -
+       G5 - - - B5 - - - D5 - - -
+       D5 - - - - - - - - - - -
+bass   1 - - - . . . . 5 - - -
+arp    . . . . 3 . 5 . 8 . 5 .
+kick   x... .... ....
+hat    x... x.x. x.x.
+
+[bridge] 8 bars
+chords Em C G D Em C Am D
+lead   B5 - - - - - - - G5 - - -
+       E5 - - - G5 - - - C6 - - -
+       B5 - - - - - - - D6 - - -
+       A5 - - - - - - - - - - -
+       G5 - - - B5 - - - E6 - - -
+       E6 - - - D6 - - - C6 - - -
+       C6 - - - B5 - - - A5 - - -
+       F#5 - - - A5 - - - D6 - - -
+bass   1 - - - - - - - . . . .
+arp    . . . . 5 . . . 3 . . .
+kick   x... .... ....
+hat    .... x... ....
+
+[outro] 2 bars
+chords C G
+lead   E6 - - - D6 - - - B5 - - -
+       G5 - - - - - - - - - - -
+bass   1 - - - . . . . . . . .
+arp    . . . . 5 . . . . . . .
+kick   x... .... ....

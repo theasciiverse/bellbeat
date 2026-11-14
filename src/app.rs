@@ -5,8 +5,9 @@ use crate::chart::{self, Difficulty, LANES};
 use crate::input::{nav, Nav, Press, K};
 use crate::play::{Cue, Play, LEAD_IN};
 use crate::save::{self, Best, Settings};
-use crate::song::SONGS;
-use crate::synth::{Audio, Inst};
+use crate::song::Song;
+use crate::synth::{Audio, Inst, Mode};
+use std::sync::Arc;
 use std::time::Instant;
 
 /// The song clock: seconds from the song's start, kept in step with the
@@ -55,6 +56,16 @@ impl Clock {
             self.t - (self.at - when).as_secs_f64()
         }
     }
+}
+
+/// Notes a second at the busiest, per difficulty.
+pub fn densities(s: &Song) -> [f64; 3] {
+    let sc = s.score();
+    let mut d = [0.0; 3];
+    for diff in Difficulty::ALL {
+        d[diff.index()] = chart::density(&chart::build(s, &sc, diff));
+    }
+    d
 }
 
 /// Calibration: tap along to the clicks.
@@ -108,12 +119,51 @@ pub enum Screen {
     Play { play: Box<Play>, paused: bool, item: usize, over_at: Option<f64> },
     Results { play: Box<Play>, new_best: bool, shown: Instant },
     Calibrate(Cal),
+    /// Choosing a section and a tempo to practise.
+    Practice,
 }
 
 pub const PAUSE_ITEMS: [&str; 3] = ["Carry on", "Start again", "Back to the songs"];
+pub const PRACTICE_PAUSE_ITEMS: [&str; 3] = ["Carry on", "Start again", "Choose a section"];
+
+/// Practice tempos, as shares of the song's own.
+pub const SPEEDS: [f32; 6] = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5];
+
+/// Practising a section of a song over and over.
+pub struct Practice {
+    pub song: Arc<Song>,
+    /// Which section, by its place in the song's order.
+    pub section: usize,
+    /// Index into `SPEEDS`.
+    pub speed: usize,
+    /// Times played through, and the last run's accuracy.
+    pub runs: u32,
+    pub last: Option<f64>,
+}
+
+impl Practice {
+    /// The sections as played: (name, first step, steps).
+    pub fn parts(&self) -> Vec<(String, usize, usize)> {
+        let sc_steps: Vec<usize> = self.song.order.iter().map(|&i| self.song.sections[i].bars * self.song.bar()).collect();
+        let mut at = 0;
+        self.song
+            .order
+            .iter()
+            .zip(sc_steps)
+            .map(|(&i, n)| {
+                let p = (self.song.sections[i].name.clone(), at, n);
+                at += n;
+                p
+            })
+            .collect()
+    }
+}
 
 pub struct App {
     pub screen: Screen,
+    /// Every song on the list, built-in ones first.
+    pub songs: Vec<Arc<Song>>,
+    pub practice: Option<Practice>,
     pub sel: usize,
     pub diff: Difficulty,
     pub settings: Settings,
@@ -133,19 +183,12 @@ pub struct App {
 
 impl App {
     pub fn new(audio: Audio, settings: Settings, bests: Vec<Best>, exact: bool) -> App {
-        let density = SONGS
-            .iter()
-            .map(|s| {
-                let sc = s.score();
-                let mut d = [0.0; 3];
-                for diff in Difficulty::ALL {
-                    d[diff.index()] = chart::density(&chart::build(s, &sc, diff));
-                }
-                d
-            })
-            .collect();
+        let songs: Vec<Arc<Song>> = crate::song::builtins().into_iter().map(Arc::new).collect();
+        let density = songs.iter().map(|s| densities(s)).collect();
         App {
             screen: Screen::Select,
+            songs,
+            practice: None,
             sel: 1,
             diff: Difficulty::Normal,
             settings,
@@ -165,8 +208,12 @@ impl App {
         self.settings.offset_ms as f64 / 1000.0
     }
 
-    pub fn best(&self, song: usize, d: Difficulty) -> Option<&Best> {
-        self.bests.iter().find(|b| b.song == SONGS[song].id && b.diff == d.name())
+    pub fn best(&self, song: &str, d: Difficulty) -> Option<&Best> {
+        self.bests.iter().find(|b| b.song == song && b.diff == d.name())
+    }
+
+    pub fn find(&self, id: &str) -> Option<usize> {
+        self.songs.iter().position(|s| s.id == id)
     }
 
     /// Back to the list, with the chosen song playing softly behind it.
@@ -177,27 +224,80 @@ impl App {
     }
 
     pub fn preview(&mut self) {
-        let def = SONGS[self.sel];
+        let Some(def) = self.songs.get(self.sel).cloned() else {
+            self.audio.with(|s| s.stop());
+            return;
+        };
         let sc = def.score();
         // from the second section, where the tune comes in
-        let from = sc.sections.get(1).copied().unwrap_or(0) as f64 * def.step_secs();
+        let from = def.time(sc.sections.get(1).copied().unwrap_or(0));
         self.audio.with(|s| {
-            s.load(def, &sc, None);
+            s.load(&def, &sc, None);
             s.preview(from);
         });
     }
 
-    pub fn start(&mut self, song: usize, diff: Difficulty) {
-        let def = SONGS[song];
-        let mut play = Play::new(song, def, diff, def.secs());
+    /// The practice section playing softly behind its screen, at its tempo.
+    fn preview_practice(&mut self) {
+        let Some(pr) = &self.practice else { return };
+        let def = pr.song.at_tempo(SPEEDS[pr.speed]);
+        let sc = def.score();
+        let from = def.time(sc.sections.get(pr.section).copied().unwrap_or(0));
+        self.audio.with(|s| {
+            s.load(&def, &sc, None);
+            s.preview(from);
+        });
+    }
+
+    pub fn start(&mut self, def: Arc<Song>, diff: Difficulty) {
+        let mut play = Play::new(def.clone(), diff, None, LEAD_IN);
         play.demo = self.demo;
         self.audio.with(|s| {
-            s.load(def, &play.score_sheet, Some(&play.chart));
+            s.load(&def, &play.score_sheet, Some(&play.chart));
             s.start(LEAD_IN);
         });
         self.clock.start(-LEAD_IN, Instant::now());
         play.update(-LEAD_IN - self.offset());
         log::info!("play {} {} ({} notes) offset {} ms speed {}", def.id, diff.name(), play.chart.notes.len(), self.settings.offset_ms, self.settings.speed);
+        self.log.clear();
+        self.screen = Screen::Play { play: Box::new(play), paused: false, item: 0, over_at: None };
+    }
+
+    /// The practice screen for the chosen song, keeping the section and
+    /// tempo if it is the same song as last time.
+    pub fn to_practice(&mut self) {
+        let Some(song) = self.songs.get(self.sel).cloned() else { return };
+        let keep = self.practice.as_ref().is_some_and(|p| p.song.id == song.id && p.section < song.order.len());
+        if !keep {
+            let section = if song.order.len() > 1 { 1 } else { 0 };
+            self.practice = Some(Practice { song, section, speed: 2, runs: 0, last: None });
+        }
+        self.clock.running = false;
+        self.screen = Screen::Practice;
+        self.preview_practice();
+    }
+
+    /// Play the practice section, slowed down, after a count-in.
+    pub fn start_practice(&mut self) {
+        let Some(pr) = &self.practice else { return };
+        let def = Arc::new(pr.song.at_tempo(SPEEDS[pr.speed]));
+        let diff = self.diff;
+        let sc = def.score();
+        let Some(&first) = sc.sections.get(pr.section) else { return };
+        let next = sc.sections.get(pr.section + 1).copied().unwrap_or(sc.steps);
+        let (from, to) = (def.time(first), def.time(next));
+        let beat = def.step_secs() * 4.0;
+        // a bar of clicks to count in; two when the bar is short
+        let bar = beat * def.meter as f64;
+        let lead = if bar < 1.6 { bar * 2.0 } else { bar };
+        let mut play = Play::new(def.clone(), diff, Some((from, to)), lead);
+        self.audio.with(|s| {
+            s.load(&def, &play.score_sheet, Some(&play.chart));
+            s.start_window(from, to, lead, beat);
+        });
+        self.clock.start(from - lead, Instant::now());
+        play.update(from - lead - self.offset());
+        log::info!("practice {} {} section {} at {:.0}% ({} notes)", def.id, diff.name(), pr.section, SPEEDS[pr.speed] * 100.0, play.chart.notes.len());
         self.log.clear();
         self.screen = Screen::Play { play: Box::new(play), paused: false, item: 0, over_at: None };
     }
@@ -221,7 +321,9 @@ impl App {
     /// Every frame: the clock, the song, and the presses since the last.
     pub fn frame(&mut self, presses: Vec<Press>, now: Instant) {
         self.audio.pump();
-        let est = self.audio.with(|s| s.estimate(now)).flatten();
+        // the synth's count is the clock while it plays; once it stops (a
+        // lost song) the clock runs on by itself to the results
+        let est = self.audio.with(|s| if matches!(s.mode, Mode::Song | Mode::Metronome { .. }) { s.estimate(now) } else { None }).flatten();
         self.clock.tick(now, est);
         for p in presses {
             if p.down {
@@ -271,14 +373,19 @@ impl App {
                     }
                     K::Char('m' | 'M') => self.audio.toggle_mute(),
                     K::Char('q' | 'Q') => self.quit = true,
+                    K::Char('p' | 'P') => {
+                        self.sfx(Inst::Tick, 0.0);
+                        self.to_practice();
+                    }
                     k => match nav(k) {
                         Some(Nav::Up) => {
-                            self.sel = (self.sel + SONGS.len() - 1) % SONGS.len();
+                            let n = self.songs.len().max(1);
+                            self.sel = (self.sel + n - 1) % n;
                             self.preview();
                             self.sfx(Inst::Tick, 0.0);
                         }
                         Some(Nav::Down) => {
-                            self.sel = (self.sel + 1) % SONGS.len();
+                            self.sel = (self.sel + 1) % self.songs.len().max(1);
                             self.preview();
                             self.sfx(Inst::Tick, 0.0);
                         }
@@ -291,9 +398,11 @@ impl App {
                             self.sfx(Inst::Tick, 0.0);
                         }
                         Some(Nav::Ok) => {
-                            self.sfx(Inst::Chime, 84.0);
-                            let (s, d) = (self.sel, self.diff);
-                            self.start(s, d);
+                            if let Some(def) = self.songs.get(self.sel).cloned() {
+                                self.sfx(Inst::Chime, 84.0);
+                                let d = self.diff;
+                                self.start(def, d);
+                            }
                         }
                         Some(Nav::Back) | Some(Nav::Quit) => self.quit = true,
                         None => {}
@@ -312,13 +421,22 @@ impl App {
                         Some(Nav::Ok) => match *item {
                             0 => self.resume(),
                             1 => {
-                                let (s, d) = (play.song, play.diff);
+                                let (def, d, practice) = (play.def.clone(), play.diff, play.practice);
                                 self.audio.with(|s| s.paused = false);
-                                self.start(s, d);
+                                if practice {
+                                    self.start_practice();
+                                } else {
+                                    self.start(def, d);
+                                }
                             }
                             _ => {
+                                let practice = play.practice;
                                 self.audio.with(|s| s.paused = false);
-                                self.to_select();
+                                if practice {
+                                    self.to_practice();
+                                } else {
+                                    self.to_select();
+                                }
                             }
                         },
                         _ => {}
@@ -370,11 +488,66 @@ impl App {
                 }
                 match p.key {
                     K::Char('r' | 'R') => {
-                        let (s, d) = (play.song, play.diff);
-                        self.start(s, d);
+                        let (def, d) = (play.def.clone(), play.diff);
+                        self.start(def, d);
                     }
                     k if matches!(nav(k), Some(Nav::Ok) | Some(Nav::Back)) => self.to_select(),
                     _ => {}
+                }
+            }
+            Screen::Practice => {
+                if !p.down {
+                    return;
+                }
+                let Some(pr) = &mut self.practice else { return self.to_select() };
+                let parts = pr.song.order.len();
+                match p.key {
+                    K::Tab | K::Char('1' | '2' | '3') => {
+                        self.diff = match p.key {
+                            K::Char('1') => Difficulty::Easy,
+                            K::Char('2') => Difficulty::Normal,
+                            K::Char('3') => Difficulty::Hard,
+                            _ => Difficulty::ALL[(self.diff.index() + 1) % 3],
+                        };
+                        self.sfx(Inst::Tick, 0.0);
+                    }
+                    K::Char('m' | 'M') => self.audio.toggle_mute(),
+                    k => match nav(k) {
+                        Some(Nav::Up) => {
+                            pr.section = (pr.section + parts - 1) % parts;
+                            pr.runs = 0;
+                            pr.last = None;
+                            self.preview_practice();
+                            self.sfx(Inst::Tick, 0.0);
+                        }
+                        Some(Nav::Down) => {
+                            pr.section = (pr.section + 1) % parts;
+                            pr.runs = 0;
+                            pr.last = None;
+                            self.preview_practice();
+                            self.sfx(Inst::Tick, 0.0);
+                        }
+                        Some(Nav::Left) => {
+                            pr.speed = (pr.speed + 1).min(SPEEDS.len() - 1);
+                            self.preview_practice();
+                            self.sfx(Inst::Tick, 0.0);
+                        }
+                        Some(Nav::Right) => {
+                            pr.speed = pr.speed.saturating_sub(1);
+                            self.preview_practice();
+                            self.sfx(Inst::Tick, 0.0);
+                        }
+                        Some(Nav::Ok) => {
+                            self.sfx(Inst::Chime, 84.0);
+                            self.start_practice();
+                        }
+                        Some(Nav::Back) => {
+                            self.sfx(Inst::Tick, 0.0);
+                            self.to_select();
+                        }
+                        Some(Nav::Quit) => self.quit = true,
+                        None => {}
+                    },
                 }
             }
             Screen::Calibrate(cal) => {
@@ -429,17 +602,18 @@ impl App {
                             self.audio.with(|s| s.stop());
                         }
                     }
-                    if over_at.is_some_and(|o| t - o > 1.2) {
+                    let wait = if play.practice { 0.4 } else { 1.2 };
+                    if over_at.is_some_and(|o| t - o > wait) {
                         finished = Some(());
                     }
                 }
             }
             Screen::Results { shown, .. } => {
-                if self.demo && shown.elapsed().as_secs_f64() > 4.0 {
-                    let next = (self.sel + 1) % SONGS.len();
+                if self.demo && shown.elapsed().as_secs_f64() > 4.0 && !self.songs.is_empty() {
+                    let next = (self.sel + 1) % self.songs.len();
                     self.sel = next;
                     let d = self.diff;
-                    self.start(next, d);
+                    self.start(self.songs[next].clone(), d);
                 }
             }
             Screen::Calibrate(cal) => {
@@ -449,7 +623,7 @@ impl App {
                     cal.flash = (raw / p).floor() * p;
                 }
             }
-            Screen::Select => {}
+            Screen::Select | Screen::Practice => {}
         }
         for c in &cues {
             match *c {
@@ -471,10 +645,20 @@ impl App {
         }
         if finished.is_some() {
             let Screen::Play { play, .. } = std::mem::replace(&mut self.screen, Screen::Select) else { unreachable!() };
+            if play.practice {
+                // round again, straight away
+                if let Some(pr) = &mut self.practice {
+                    pr.runs += 1;
+                    pr.last = Some(play.accuracy());
+                    log::info!("practice run {} accuracy {:.3} counts {:?}", pr.runs, play.accuracy(), play.counts);
+                }
+                self.start_practice();
+                return;
+            }
             let mut new_best = false;
             if !play.demo && !play.failed {
                 let b = Best {
-                    song: play.def.id.into(),
+                    song: play.def.id.clone(),
                     diff: play.diff.name().into(),
                     score: play.score(),
                     accuracy: (play.accuracy() * 1000.0).round() as u32,
@@ -493,7 +677,8 @@ impl App {
     /// A line for the session log every half second.
     pub fn snapshot(&self) {
         match &self.screen {
-            Screen::Select => log::debug!("snapshot: songs, {} {} speed {} offset {}", SONGS[self.sel].id, self.diff.name(), self.settings.speed, self.settings.offset_ms),
+            Screen::Select => log::debug!("snapshot: songs, {:?} {} speed {} offset {}", self.songs.get(self.sel).map(|s| &s.id), self.diff.name(), self.settings.speed, self.settings.offset_ms),
+            Screen::Practice => log::debug!("snapshot: practice {:?}", self.practice.as_ref().map(|p| (&p.song.id, p.section, SPEEDS[p.speed]))),
             Screen::Play { play, paused, .. } => log::debug!(
                 "snapshot: play {} {} t {:.2} paused {paused} score {} combo {} groove {:.2} counts {:?} down {:?}",
                 play.def.id,

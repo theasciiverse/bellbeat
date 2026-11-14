@@ -12,7 +12,7 @@
 //! step up or down never stays in the same lane, so the hands move the way
 //! the melody does. Melody notes of half a bar or more are held.
 
-use crate::song::{Score, SongDef, Tone};
+use crate::song::{Score, Song, Tone};
 
 pub const LANES: usize = 4;
 
@@ -48,6 +48,9 @@ impl Difficulty {
 pub enum Sound {
     /// A melody note, by its index in `Score::lead`.
     Lead(usize),
+    /// A harmony note (the other half of a chord on Hard), by its index in
+    /// `Score::harmony`.
+    Harmony(usize),
     Snare,
 }
 
@@ -68,6 +71,8 @@ pub struct Chart {
     pub notes: Vec<Note>,
     /// Which melody notes are the player's (the others play themselves).
     pub played: Vec<bool>,
+    /// Which harmony notes are the player's.
+    pub harmony_played: Vec<bool>,
     /// Snare hits the player plays on Hard, by step.
     pub snare_played: Vec<usize>,
 }
@@ -82,6 +87,9 @@ fn wanted(t: &Tone, d: Difficulty) -> bool {
 
 /// The lane for each melody note, from the tune's shape.
 pub fn lanes(lead: &[Tone]) -> Vec<usize> {
+    if lead.is_empty() {
+        return Vec::new();
+    }
     let (lo, hi) = lead.iter().fold((i32::MAX, i32::MIN), |(lo, hi), t| (lo.min(t.midi), hi.max(t.midi)));
     let span = (hi - lo + 1).max(1) as f32;
     let mut out = Vec::with_capacity(lead.len());
@@ -106,8 +114,15 @@ pub fn lanes(lead: &[Tone]) -> Vec<usize> {
     out
 }
 
-pub fn build(song: &SongDef, score: &Score, d: Difficulty) -> Chart {
-    let step = song.step_secs();
+/// Whether a note at `t` lasting `hold` fits in `lane`: nothing else
+/// there within `gap` either side, held notes included.
+fn free(notes: &[Note], lane: usize, t: f64, hold: f64, gap: f64) -> bool {
+    !notes.iter().any(|n| n.lane == lane && t + hold > n.t - gap && t < n.t + n.hold + gap)
+}
+
+pub fn build(song: &Song, score: &Score, d: Difficulty) -> Chart {
+    let time = |s: usize| song.time(s);
+    let hold_of = |t: &Tone| if t.len >= HOLD_STEPS { time(t.step + t.len - 1) - time(t.step) } else { 0.0 };
     let lane_of = lanes(&score.lead);
     let mut notes = Vec::new();
     let mut played = vec![false; score.lead.len()];
@@ -116,18 +131,43 @@ pub fn build(song: &SongDef, score: &Score, d: Difficulty) -> Chart {
             continue;
         }
         played[i] = true;
-        let hold = if t.len >= HOLD_STEPS { (t.len as f64 - 1.0) * step } else { 0.0 };
-        notes.push(Note { t: t.step as f64 * step, lane: lane_of[i], hold, sound: Sound::Lead(i) });
+        notes.push(Note { t: time(t.step), lane: lane_of[i], hold: hold_of(t), sound: Sound::Lead(i) });
     }
+    // two taps in a lane are this far apart at least: the shortest
+    // sixteenth, swing and all, and a little more
+    let gap = (0..4).map(|s| time(s + 1) - time(s)).fold(f64::MAX, f64::min) * 1.2;
+    let mut harmony_played = vec![false; score.harmony.len()];
     let mut snare_played = Vec::new();
     if d == Difficulty::Hard {
+        // chords: a harmony note sounding with a melody note of yours is
+        // yours too, in the lane beside it on the side it lies
+        let mut chords = Vec::new();
+        for (i, h) in score.harmony.iter().enumerate() {
+            let Some(m) = score.lead.iter().position(|t| t.step == h.step) else { continue };
+            if !played[m] || score.lead[m].midi == h.midi {
+                continue;
+            }
+            let ml = lane_of[m] as i32;
+            let side = if h.midi < score.lead[m].midi { -1 } else { 1 };
+            let t = time(h.step);
+            let hold = hold_of(h);
+            let pick = [ml + side, ml - side, ml + 2 * side, ml - 2 * side]
+                .into_iter()
+                .filter(|&l| (0..LANES as i32).contains(&l))
+                .map(|l| l as usize)
+                .find(|&l| free(&notes, l, t, hold, gap) && free(&chords, l, t, hold, gap));
+            if let Some(lane) = pick {
+                harmony_played[i] = true;
+                chords.push(Note { t, lane, hold, sound: Sound::Harmony(i) });
+            }
+        }
+        notes.extend(chords);
         for &s in &score.snare {
             // the other hand from the melody's last lane
             let last = score.lead.iter().rposition(|t| t.step <= s).map(|i| lane_of[i]).unwrap_or(0);
             let lane = if last <= 1 { 3 } else { 0 };
-            let t = s as f64 * step;
-            let busy = notes.iter().any(|n| n.lane == lane && (n.t - t).abs() < step * 1.5 || (n.lane == lane && n.hold > 0.0 && t >= n.t && t <= n.t + n.hold));
-            if busy {
+            let t = time(s);
+            if !free(&notes, lane, t, 0.0, gap.max(song.step_secs() * 1.5)) {
                 continue;
             }
             snare_played.push(s);
@@ -135,7 +175,7 @@ pub fn build(song: &SongDef, score: &Score, d: Difficulty) -> Chart {
         }
     }
     notes.sort_by(|a, b| a.t.total_cmp(&b.t).then(a.lane.cmp(&b.lane)));
-    Chart { notes, played, snare_played }
+    Chart { notes, played, harmony_played, snare_played }
 }
 
 /// Notes a second, at the busiest eight seconds, for the song list's stars.
@@ -154,11 +194,11 @@ pub fn density(chart: &Chart) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::song::SONGS;
+    use crate::song::builtins;
 
     #[test]
     fn charts_grow_with_difficulty() {
-        for s in SONGS {
+        for s in &builtins() {
             let sc = s.score();
             let n: Vec<usize> = Difficulty::ALL.iter().map(|&d| build(s, &sc, d).notes.len()).collect();
             assert!(n[0] >= 20, "{} easy has {}", s.id, n[0]);
@@ -169,10 +209,11 @@ mod tests {
 
     #[test]
     fn notes_are_playable() {
-        for s in SONGS {
+        for s in &builtins() {
             let sc = s.score();
             for d in Difficulty::ALL {
                 let c = build(s, &sc, d);
+                let gap = (0..4).map(|k| s.time(k + 1) - s.time(k)).fold(f64::MAX, f64::min) * 0.99;
                 assert!(c.notes.windows(2).all(|w| w[0].t <= w[1].t), "{} {d:?} unsorted", s.id);
                 for (i, a) in c.notes.iter().enumerate() {
                     assert!(a.lane < LANES);
@@ -183,10 +224,25 @@ mod tests {
                             break;
                         }
                         if b.lane == a.lane {
-                            assert!(b.t >= a.t + a.hold + s.step_secs() * 0.99, "{} {d:?}: lane {} at {:.2} and {:.2}", s.id, a.lane, a.t, b.t);
+                            assert!(b.t >= a.t + a.hold + gap, "{} {d:?}: lane {} at {:.2} and {:.2}", s.id, a.lane, a.t, b.t);
                         }
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn hard_has_chords() {
+        for s in &builtins() {
+            let sc = s.score();
+            let c = build(s, &sc, Difficulty::Hard);
+            let chords = c.notes.windows(2).filter(|w| w[0].t == w[1].t && w[0].lane != w[1].lane).count();
+            if sc.harmony.len() > 8 {
+                assert!(chords >= 6, "{} has {chords} chords on Hard", s.id);
+            }
+            for d in [Difficulty::Easy, Difficulty::Normal] {
+                assert!(build(s, &sc, d).notes.iter().all(|n| !matches!(n.sound, Sound::Harmony(_))));
             }
         }
     }

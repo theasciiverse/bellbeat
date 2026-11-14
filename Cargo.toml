@@ -1,6 +1,6 @@
 [package]
 name = "bellbeat"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 license = "MIT"
 description = "Asciiverse rhythm game: notes fall down four lanes, and every note you hit plays the melody; Rust + Ratatui"

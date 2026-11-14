@@ -5,7 +5,8 @@
 //! latency offset, so a note is on time when its `t` is.
 
 use crate::chart::{self, Chart, Difficulty, Note, Sound, LANES};
-use crate::song::{Score, SongDef};
+use crate::song::{Score, Song};
+use std::sync::Arc;
 
 /// How far off a press may be and still count.
 pub const PERFECT: f64 = 0.045;
@@ -51,8 +52,7 @@ pub struct Spark {
 }
 
 pub struct Play {
-    pub song: usize,
-    pub def: &'static SongDef,
+    pub def: Arc<Song>,
     pub diff: Difficulty,
     pub score_sheet: Score,
     pub chart: Chart,
@@ -80,18 +80,30 @@ pub struct Play {
     pub demo: bool,
     pub now: f64,
     seed: u32,
-    /// The song's length (last note's end, or the music's end).
+    /// The song's length (last note's end, or the music's end), or where
+    /// a practice section ends.
     pub length: f64,
+    /// Where play begins: 0, or a practice section's start.
+    pub start: f64,
+    /// Practice: no groove meter, no losing, no best scores.
+    pub practice: bool,
 }
 
 impl Play {
-    pub fn new(song: usize, def: &'static SongDef, diff: Difficulty, music_end: f64) -> Play {
+    /// A song from the start, or with `window` only the part between two
+    /// times (practice), after `lead_in` seconds.
+    pub fn new(def: Arc<Song>, diff: Difficulty, window: Option<(f64, f64)>, lead_in: f64) -> Play {
         let score_sheet = def.score();
-        let chart = chart::build(def, &score_sheet, diff);
+        let mut chart = chart::build(&def, &score_sheet, diff);
+        let (start, length) = match window {
+            Some((a, b)) => {
+                chart.notes.retain(|n| n.t >= a - 1e-6 && n.t < b - 1e-6);
+                (a, b)
+            }
+            None => (0.0, chart.notes.iter().map(|n| n.t + n.hold).fold(0.0, f64::max).max(def.secs())),
+        };
         let n = chart.notes.len();
-        let last = chart.notes.iter().map(|n| n.t + n.hold).fold(0.0, f64::max);
         Play {
-            song,
             def,
             diff,
             score_sheet,
@@ -113,9 +125,11 @@ impl Play {
             glitch: [-99.0; LANES],
             cues: Vec::new(),
             demo: false,
-            now: -LEAD_IN,
+            now: start - lead_in,
             seed: 0x9e37_79b9,
-            length: last.max(music_end),
+            length,
+            start,
+            practice: window.is_some(),
         }
     }
 
@@ -178,6 +192,7 @@ impl Play {
             Difficulty::Normal => (0.07, 0.03),
             Difficulty::Hard => (0.09, 0.025),
         };
+        let (loss, gain) = if self.practice { (0.0, 0.0) } else { (loss, gain) };
         match j {
             Judge::Miss => {
                 self.combo = 0;
@@ -199,7 +214,7 @@ impl Play {
             }
         }
         self.last = Some((j, at, at - self.chart.notes[i].t));
-        if self.groove <= 0.0 && !self.failed {
+        if self.groove <= 0.0 && !self.failed && !self.practice {
             self.failed = true;
             log::info!("groove ran out at {at:.2}");
         }
@@ -347,24 +362,26 @@ impl Play {
 
     /// 0..1 through the song.
     pub fn progress(&self) -> f64 {
-        (self.now / self.length).clamp(0.0, 1.0)
+        ((self.now - self.start) / (self.length - self.start).max(0.01)).clamp(0.0, 1.0)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::song::SONGS;
+    use crate::song::builtins;
 
-    fn play(song: usize, d: Difficulty) -> Play {
-        let def = SONGS[song];
-        let end = def.secs();
-        Play::new(song, def, d, end)
+    fn song(id: &str) -> Arc<Song> {
+        Arc::new(builtins().into_iter().find(|s| s.id == id).unwrap())
+    }
+
+    fn play(id: &str, d: Difficulty) -> Play {
+        Play::new(song(id), d, None, LEAD_IN)
     }
 
     #[test]
     fn perfect_good_and_miss() {
-        let mut p = play(1, Difficulty::Normal);
+        let mut p = play("hello-world", Difficulty::Normal);
         let n0 = p.notes()[0];
         p.update(n0.t - 0.5);
         p.press(n0.lane, n0.t + 0.02, true);
@@ -383,7 +400,7 @@ mod tests {
 
     #[test]
     fn a_press_in_the_wrong_lane_or_too_soon_does_nothing() {
-        let mut p = play(1, Difficulty::Normal);
+        let mut p = play("hello-world", Difficulty::Normal);
         let n0 = p.notes()[0];
         p.press((n0.lane + 1) % LANES, n0.t, true);
         p.press(n0.lane, n0.t - 0.5, true);
@@ -396,7 +413,7 @@ mod tests {
     #[test]
     fn holds_count_only_when_held_through() {
         for d in [Difficulty::Easy, Difficulty::Normal] {
-            let mut p = play(0, d);
+            let mut p = play("lullaby-for-a-daemon", d);
             let Some(i) = p.notes().iter().position(|n| n.hold > 0.5) else { panic!("no hold") };
             let n = p.notes()[i];
             p.update(n.t - 0.01);
@@ -407,7 +424,7 @@ mod tests {
             assert_eq!(p.hold[i], Hold::Dropped);
         }
         // without key releases a hold holds itself
-        let mut p = play(0, Difficulty::Easy);
+        let mut p = play("lullaby-for-a-daemon", Difficulty::Easy);
         let i = p.notes().iter().position(|n| n.hold > 0.5).unwrap();
         let n = p.notes()[i];
         p.press(n.lane, n.t, false);
@@ -416,9 +433,10 @@ mod tests {
 
     #[test]
     fn the_demo_plays_every_song_through() {
-        for (s, def) in SONGS.iter().enumerate() {
+        for def in builtins() {
+            let def = Arc::new(def);
             for d in Difficulty::ALL {
-                let mut p = play(s, d);
+                let mut p = Play::new(def.clone(), d, None, LEAD_IN);
                 p.demo = true;
                 let mut t = -LEAD_IN;
                 while !p.finished && t < def.secs() + 10.0 {
@@ -435,8 +453,26 @@ mod tests {
     }
 
     #[test]
+    fn practice_plays_a_section_and_cannot_be_lost() {
+        let def = song("kernel-panic");
+        let sc = def.score();
+        let (a, b) = (def.time(sc.sections[2]), def.time(sc.sections[3]));
+        let mut p = Play::new(Arc::new(def.at_tempo(0.5)), Difficulty::Hard, Some((a * 2.0, b * 2.0)), 2.0);
+        assert!(p.notes().iter().all(|n| n.t >= a * 2.0 - 1e-6 && n.t < b * 2.0));
+        assert!(p.notes().len() > 20);
+        let mut t = p.now;
+        while !p.finished {
+            t += 0.05;
+            p.update(t);
+        }
+        assert!(!p.failed);
+        assert_eq!(p.counts[2] as usize, p.notes().len());
+        assert!(t < b * 2.0 + 3.0);
+    }
+
+    #[test]
     fn missing_everything_loses_the_song() {
-        let mut p = play(4, Difficulty::Hard);
+        let mut p = play("kernel-panic", Difficulty::Hard);
         let mut t = -LEAD_IN;
         while !p.finished {
             t += 0.05;

@@ -46,14 +46,20 @@ miss leaves a hole in the tune. Long notes are held.
 
 On the song list: \u{2191} \u{2193} choose a song, \u{2190} \u{2192} the difficulty, Enter
 play, [ and ] how fast the notes fall, - and + the sound offset, c
-calibrate the offset by tapping along to clicks, Esc quit.
+calibrate the offset by tapping along to clicks, p practise a section,
+Esc quit.
+
+Practice: \u{2191} \u{2193} choose a section, \u{2190} \u{2192} slower or faster, Tab the
+difficulty, Enter play it round and round (no groove meter, no losing),
+Esc back.
 
 Held notes need key releases: kitty, foot, WezTerm, Ghostty, Alacritty,
 iTerm2 and others report them, and so does a gamepad. Elsewhere a held
 note holds itself once you hit it.
 
-Songs: lullaby-for-a-daemon, hello-world, carriage-return,
-null-pointer-samba, kernel-panic.
+Songs: lullaby-for-a-daemon, hello-world, waltz-for-a-spinning-disk,
+cron-at-midnight, carriage-return, tab-complete-shuffle, null-pointer-samba,
+escape-sequence, kernel-panic.
 
   --demo                     watch the game play (any of Esc, p, Start stops it)
   --mute                     no sound
@@ -84,7 +90,7 @@ fn main() -> io::Result<()> {
         let (w, h) = v.split_once('x')?;
         Some((w.parse::<u16>().ok()?.clamp(20, 1000), h.parse::<u16>().ok()?.clamp(10, 500)))
     });
-    let song = arg("--song").and_then(song::find);
+    let song_id = arg("--song");
     let diff = arg("--difficulty").and_then(Difficulty::from_name);
     let demo = args.iter().any(|a| a == "--demo");
     let mut settings = save::load_settings();
@@ -98,7 +104,7 @@ fn main() -> io::Result<()> {
     }
 
     if let Some(secs) = arg("--shot") {
-        shot(secs.parse().unwrap_or(10.0), size.unwrap_or((100, 30)), song.unwrap_or(4), diff.unwrap_or(Difficulty::Hard), settings);
+        shot(secs.parse().unwrap_or(10.0), size.unwrap_or((100, 30)), song_id.unwrap_or("kernel-panic"), diff.unwrap_or(Difficulty::Hard), settings);
         return Ok(());
     }
     if let Some(frames) = arg("--bench") {
@@ -122,6 +128,7 @@ fn main() -> io::Result<()> {
     log::info!("start {}x{} kitty_keyboard={kitty} pad={:?} sound device {} offset {} ms speed {}", screen.width, screen.height, input.pad_name, audio.device(), settings.offset_ms, settings.speed);
     let mut app = App::new(audio, settings, save::load_scores(), kitty || input.pad_name.is_some());
     app.demo = demo;
+    let song = song_id.and_then(|id| app.find(id));
     if let Some(s) = song {
         app.sel = s;
     }
@@ -129,10 +136,10 @@ fn main() -> io::Result<()> {
         app.diff = d;
     }
     if demo {
-        let (s, d) = (song.unwrap_or(4), diff.unwrap_or(Difficulty::Hard));
+        let (s, d) = (song.or(app.find("kernel-panic")).unwrap_or(0), diff.unwrap_or(Difficulty::Hard));
         app.sel = s;
         app.diff = d;
-        app.start(s, d);
+        app.start(app.songs[s].clone(), d);
     } else {
         app.to_select();
     }
@@ -206,11 +213,16 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App, input: &mut Input
 
 /// Play `secs` of a song on the demo without a terminal or sound, and print
 /// the screen.
-fn shot(secs: f64, (w, h): (u16, u16), song: usize, diff: Difficulty, settings: save::Settings) {
+fn shot(secs: f64, (w, h): (u16, u16), song: &str, diff: Difficulty, settings: save::Settings) {
     let audio = synth::Audio::headless();
     let mut app = App::new(audio, settings, Vec::new(), true);
     app.demo = true;
-    app.start(song, diff);
+    let Some(i) = app.find(song) else {
+        eprintln!("no song {song}");
+        return;
+    };
+    app.sel = i;
+    app.start(app.songs[i].clone(), diff);
     let start = Instant::now();
     // drive the clock by hand, a frame at a time, rendering the synth to match
     let frames = (secs * 60.0) as u32;
@@ -233,7 +245,8 @@ fn bench(frames: u32, (w, h): (u16, u16), settings: save::Settings) {
     let audio = synth::Audio::headless();
     let mut app = App::new(audio, settings, Vec::new(), true);
     app.demo = true;
-    app.start(4, Difficulty::Hard);
+    let i = app.find("kernel-panic").unwrap_or(0);
+    app.start(app.songs[i].clone(), Difficulty::Hard);
     let area = Rect::new(0, 0, w, h);
     let mut buf = Buffer::empty(area);
     let start = Instant::now();

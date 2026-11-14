@@ -6,7 +6,9 @@ terminal was ever built to make.
 Notes fall down four lanes; hit each one as it reaches the line. **Every
 note you hit is a note of the song:** it plays the moment you hit it, and a
 note you miss is a hole in the tune. Play well and you are playing the
-melody. The five songs are Asciiverse's own, synthesised as they play.
+melody. The nine songs are Asciiverse's own, synthesised as they play:
+a lullaby, a waltz in 3/4, a swung shuffle, a samba and a kernel panic
+among them.
 
 ## How to play
 
@@ -22,15 +24,21 @@ start it from av's list. Or build it: `cargo run --release`.
 
 On the song list: **↑ ↓** pick a song, **← →** the difficulty, **Enter**
 play, **[ ]** how fast the notes fall, **- +** the sound offset, **C**
-calibrate, **Esc** quit.
+calibrate, **P** practise, **Esc** quit.
 
 - **Easy:** the melody's notes on the beat; the rest of the tune plays itself.
 - **Normal:** the melody's notes on every eighth.
-- **Hard:** the whole melody, and the snare's backbeat with your other hand.
+- **Hard:** the whole melody, its chords (two lanes at once where the song
+  has a harmony), and the snare's backbeat with your other hand.
 
 Hits come as PERFECT (within 45 ms) or GOOD (within 95 ms); every ten
 notes in a row raise the multiplier, up to x4. Misses drain the groove
 meter, and when it runs dry the song is lost.
+
+**Practice:** press P on the song list, pick a section with **↑ ↓** and a
+tempo from 50% to 100% with **← →** (**Tab** changes the difficulty), and
+**Enter** plays that section round and round, with a count-in, no groove
+meter and no losing. Your accuracy on the last round shows beside the lanes.
 
 **Calibrate first.** Sound takes a moment to reach your ears, more with
 Bluetooth headphones. Press C on the song list and tap along to the clicks;

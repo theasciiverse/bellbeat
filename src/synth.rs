@@ -16,7 +16,7 @@
 //! clock and the scope work the same either way.
 
 use crate::chart::{Chart, Sound};
-use crate::song::{Lead, Score, SongDef, BAR};
+use crate::song::{Lead, Score, Song};
 use std::f32::consts::TAU;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -65,8 +65,20 @@ struct Voice {
     gate: u32,
     vol: f32,
     lp: f32,
-    /// The melody note this voice plays for the player, to release it.
-    tag: Option<usize>,
+    /// The note this voice plays for the player, to release it.
+    tag: Option<Sound>,
+}
+
+/// The harmony plays this much softer than the melody.
+const HARMONY: f32 = 0.6;
+
+fn lead_volume(lead: Lead) -> f32 {
+    match lead {
+        Lead::Bell => 0.30,
+        Lead::Pulse => 0.16,
+        Lead::Pluck => 0.20,
+        Lead::Flute => 0.24,
+    }
 }
 
 fn hz(midi: f32) -> f32 {
@@ -239,8 +251,9 @@ pub struct Synth {
     next: usize,
     end: i64,
     lead: Lead,
-    /// What each melody note is, for the player's hits.
+    /// What each melody and harmony note is, for the player's hits.
     tones: Vec<(f32, u32)>,
+    harmony: Vec<(f32, u32)>,
     voices: Vec<Voice>,
     noise: u32,
     echo: Vec<f32>,
@@ -272,6 +285,7 @@ impl Synth {
             end: 0,
             lead: Lead::Bell,
             tones: Vec::new(),
+            harmony: Vec::new(),
             voices: Vec::with_capacity(64),
             noise: 0x2468_ace1,
             echo: vec![0.0; SR as usize],
@@ -288,34 +302,37 @@ impl Synth {
     /// Lay out the song: everything that plays itself as events, and the
     /// player's melody notes for `hit`. `chart` None plays all of it (the
     /// preview).
-    pub fn load(&mut self, song: &SongDef, score: &Score, chart: Option<&Chart>) {
-        let step = song.step_secs() as f32 * SRF;
-        let at = |s: usize| (s as f32 * step) as i64;
-        let len = |n: usize| (n as f32 * step) as u32;
+    pub fn load(&mut self, song: &Song, score: &Score, chart: Option<&Chart>) {
+        let secs = |s: usize| song.time(s) * SRF as f64;
+        let at = |s: usize| secs(s) as i64;
+        let len = |s: usize, n: usize| (secs(s + n) - secs(s)) as u32;
+        let sixteenth = (song.step_secs() * SRF as f64) as u32;
         let mut ev = Vec::new();
         self.lead = song.lead;
-        self.tones = score.lead.iter().map(|t| (t.midi as f32, len(t.len))).collect();
-        let lead_vol = match song.lead {
-            Lead::Bell => 0.30,
-            Lead::Pulse => 0.16,
-            Lead::Pluck => 0.20,
-            Lead::Flute => 0.24,
-        };
+        self.tones = score.lead.iter().map(|t| (t.midi as f32, len(t.step, t.len))).collect();
+        self.harmony = score.harmony.iter().map(|t| (t.midi as f32, len(t.step, t.len))).collect();
+        let lead_vol = lead_volume(song.lead);
         for (i, t) in score.lead.iter().enumerate() {
             if chart.is_some_and(|c| c.played[i]) {
                 continue;
             }
-            ev.push(Ev { at: at(t.step), inst: Inst::Lead(song.lead), midi: t.midi as f32, len: len(t.len).saturating_sub(len(1) / 4), vol: lead_vol });
+            ev.push(Ev { at: at(t.step), inst: Inst::Lead(song.lead), midi: t.midi as f32, len: len(t.step, t.len).saturating_sub(sixteenth / 4), vol: lead_vol });
+        }
+        for (i, t) in score.harmony.iter().enumerate() {
+            if chart.is_some_and(|c| c.harmony_played[i]) {
+                continue;
+            }
+            ev.push(Ev { at: at(t.step), inst: Inst::Lead(song.lead), midi: t.midi as f32, len: len(t.step, t.len).saturating_sub(sixteenth / 4), vol: lead_vol * HARMONY });
         }
         for t in &score.bass {
-            ev.push(Ev { at: at(t.step), inst: Inst::Bass, midi: t.midi as f32, len: len(t.len).saturating_sub(len(1) / 3), vol: 0.20 });
+            ev.push(Ev { at: at(t.step), inst: Inst::Bass, midi: t.midi as f32, len: len(t.step, t.len).saturating_sub(sixteenth / 3), vol: 0.20 });
         }
         for t in &score.arp {
-            ev.push(Ev { at: at(t.step), inst: Inst::Arp, midi: t.midi as f32, len: len(1), vol: 0.035 });
+            ev.push(Ev { at: at(t.step), inst: Inst::Arp, midi: t.midi as f32, len: len(t.step, 1), vol: 0.035 });
         }
         for (s, root, iv) in &score.chords {
             for &i in iv.iter().take(3) {
-                ev.push(Ev { at: at(*s), inst: Inst::Pad, midi: (root + 12 + i) as f32, len: len(BAR) - len(1), vol: 0.035 });
+                ev.push(Ev { at: at(*s), inst: Inst::Pad, midi: (root + 12 + i) as f32, len: len(*s, song.bar()).saturating_sub(sixteenth), vol: 0.035 });
             }
         }
         let mine: &[usize] = chart.map_or(&[], |c| &c.snare_played);
@@ -335,6 +352,25 @@ impl Synth {
         self.end = at(score.steps);
         self.next = 0;
         self.voices.retain(|v| matches!(v.inst, Inst::Tick | Inst::Chime));
+    }
+
+    /// Practice: only what lies between `from` and `to` (seconds) plays,
+    /// after a count-in of clicks every `beat` seconds for `lead_in`.
+    pub fn start_window(&mut self, from: f64, to: f64, lead_in: f64, beat: f64) {
+        let (a, b) = ((from * SRF as f64) as i64, (to * SRF as f64) as i64);
+        self.events.retain(|e| e.at >= a && e.at < b);
+        let mut k = 1;
+        while k as f64 * beat <= lead_in + 1e-6 && k <= 8 {
+            let at = a - (k as f64 * beat * SRF as f64) as i64;
+            self.events.push(Ev { at, inst: Inst::Click(k % 4 == 0), midi: 0.0, len: 0, vol: 0.4 });
+            k += 1;
+        }
+        self.events.sort_by_key(|e| e.at);
+        self.end = b;
+        self.mode = Mode::Song;
+        self.paused = false;
+        self.volume = 1.0;
+        self.seek(a - (lead_in * SRF as f64) as i64);
     }
 
     /// Start the loaded song after `lead_in` seconds.
@@ -382,26 +418,28 @@ impl Synth {
         match sound {
             Sound::Lead(i) => {
                 let Some(&(midi, len)) = self.tones.get(i) else { return };
-                let vol = match self.lead {
-                    Lead::Bell => 0.30,
-                    Lead::Pulse => 0.16,
-                    Lead::Pluck => 0.20,
-                    Lead::Flute => 0.24,
-                };
-                // a held note sounds until `release`; a tap for its length
-                let gate = if held { u32::MAX / 4 } else { len.saturating_sub(SR / 40) };
-                let mut v = Voice::new(Inst::Lead(self.lead), midi, gate, vol);
-                v.tag = Some(i);
-                self.add(v);
+                self.play_tagged(sound, midi, len, held, lead_volume(self.lead));
+            }
+            Sound::Harmony(i) => {
+                let Some(&(midi, len)) = self.harmony.get(i) else { return };
+                self.play_tagged(sound, midi, len, held, lead_volume(self.lead) * HARMONY);
             }
             Sound::Snare => self.add(Voice::new(Inst::Snare, 0.0, 0, 0.26)),
         }
     }
 
+    fn play_tagged(&mut self, sound: Sound, midi: f32, len: u32, held: bool, vol: f32) {
+        // a held note sounds until `release`; a tap for its length
+        let gate = if held { u32::MAX / 4 } else { len.saturating_sub(SR / 40) };
+        let mut v = Voice::new(Inst::Lead(self.lead), midi, gate, vol);
+        v.tag = Some(sound);
+        self.add(v);
+    }
+
     /// The player let go of a held note.
     pub fn release(&mut self, sound: Sound) {
-        if let Sound::Lead(i) = sound {
-            for v in self.voices.iter_mut().filter(|v| v.tag == Some(i)) {
+        if matches!(sound, Sound::Lead(_) | Sound::Harmony(_)) {
+            for v in self.voices.iter_mut().filter(|v| v.tag == Some(sound)) {
                 v.gate = v.gate.min(v.age);
             }
         }
@@ -614,13 +652,13 @@ impl Audio {
 mod tests {
     use super::*;
     use crate::chart::{build, Difficulty};
-    use crate::song::SONGS;
+    use crate::song::builtins;
 
     #[test]
     fn every_song_renders_cleanly() {
-        for song in SONGS {
+        for song in &builtins() {
             let sc = song.score();
-            let chart = build(song, &sc, Difficulty::Normal);
+            let chart = build(song, &sc, Difficulty::Hard);
             let mut s = Synth::new();
             s.load(song, &sc, Some(&chart));
             s.start(0.0);
@@ -633,6 +671,10 @@ mod tests {
             for i in 0..sc.lead.len().min(8) {
                 s.hit(Sound::Lead(i), false);
             }
+            for i in 0..sc.harmony.len().min(4) {
+                s.hit(Sound::Harmony(i), true);
+                s.release(Sound::Harmony(i));
+            }
             let mut buf = vec![0.0f32; SR as usize];
             s.render(&mut buf);
             assert!(buf.iter().all(|x| x.is_finite()));
@@ -642,7 +684,7 @@ mod tests {
     #[test]
     fn the_clock_counts_samples_and_stops_in_pause() {
         let mut s = Synth::new();
-        let song = SONGS[0];
+        let song = &builtins()[0];
         s.load(song, &song.score(), None);
         s.start(1.0);
         assert_eq!(s.pos, -(SR as i64));
@@ -657,17 +699,17 @@ mod tests {
     #[test]
     fn a_held_note_rings_until_released() {
         let mut s = Synth::new();
-        let song = SONGS[0];
+        let song = &builtins()[0];
         let sc = song.score();
         s.load(song, &sc, Some(&build(song, &sc, Difficulty::Easy)));
         s.mode = Mode::Idle;
         s.hit(Sound::Lead(0), true);
         let mut buf = vec![0.0; SR as usize];
         s.render(&mut buf);
-        assert_eq!(s.voices.iter().filter(|v| v.tag == Some(0)).count(), 1);
+        assert_eq!(s.voices.iter().filter(|v| v.tag == Some(Sound::Lead(0))).count(), 1);
         s.release(Sound::Lead(0));
         let mut buf = vec![0.0; SR as usize * 2];
         s.render(&mut buf);
-        assert_eq!(s.voices.iter().filter(|v| v.tag == Some(0)).count(), 0);
+        assert_eq!(s.voices.iter().filter(|v| v.tag == Some(Sound::Lead(0))).count(), 0);
     }
 }

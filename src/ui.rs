@@ -5,11 +5,10 @@
 //! notes fall smoothly by half rows. The scope beside them draws the very
 //! samples the synth just made, in Braille.
 
-use crate::app::{App, Cal, Screen, CAL_TAPS, PAUSE_ITEMS};
+use crate::app::{App, Cal, Screen, CAL_TAPS, PAUSE_ITEMS, PRACTICE_PAUSE_ITEMS, SPEEDS};
 use crate::chart::{Difficulty, Sound, LANES};
 use crate::font;
 use crate::play::{Hold, Judge, Play};
-use crate::song::SONGS;
 use crate::synth::SCOPE;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -104,6 +103,7 @@ pub fn log_line(play: &Play, j: Judge, at: f64, off: f64) -> String {
     let i = play.judged.iter().zip(play.notes()).position(|(x, _)| x.is_some_and(|(jj, a)| jj == j && a == at));
     let what = match i.map(|i| play.notes()[i].sound) {
         Some(Sound::Lead(k)) => note_name(play.score_sheet.lead[k].midi),
+        Some(Sound::Harmony(k)) => note_name(play.score_sheet.harmony[k].midi),
         Some(Sound::Snare) => "snare".into(),
         None => "?".into(),
     };
@@ -120,11 +120,12 @@ pub fn draw(app: &App, buf: &mut Buffer, area: Rect) {
         Screen::Play { play, paused, item, .. } => {
             draw_play(app, play, buf, area);
             if *paused {
-                draw_pause(buf, area, *item);
+                draw_pause(buf, area, *item, play.practice);
             }
         }
         Screen::Results { play, new_best, shown } => draw_results(app, play, *new_best, shown.elapsed().as_secs_f64(), buf, area),
         Screen::Calibrate(cal) => draw_calibrate(app, cal, buf, area),
+        Screen::Practice => draw_practice(app, buf, area),
     }
 }
 
@@ -363,7 +364,7 @@ fn draw_play(app: &App, play: &Play, buf: &mut Buffer, area: Rect) {
         if row < g.top as i64 || row >= g.hy as i64 || b < 0 {
             continue;
         }
-        let bar = b % 4 == 0;
+        let bar = b % play.def.meter as i64 == 0;
         for lane in 0..LANES {
             let lx = lane_x(&g, lane);
             for cx in 0..g.lw {
@@ -466,8 +467,8 @@ fn draw_play(app: &App, play: &Play, buf: &mut Buffer, area: Rect) {
         let y = g.hy.saturating_sub(4).max(g.top);
         centre(buf, field, y, &format!("{} combo", play.combo), if fever { AMBER } else { TEXT });
     }
-    if play.now < -0.3 {
-        let n = (-play.now).ceil() as i32;
+    if play.now < play.start - 0.3 {
+        let n = (play.start - play.now).ceil() as i32;
         centre(buf, field, g.top + (g.hy - g.top) / 3, &format!("{n}"), BRIGHT);
         centre(buf, field, g.top + (g.hy - g.top) / 3 + 2, "ready", DIM);
     }
@@ -484,10 +485,17 @@ fn draw_play(app: &App, play: &Play, buf: &mut Buffer, area: Rect) {
         let mut y = l.y;
         put(buf, l, l.x + 1, y, "\u{2407} BELLBEAT", AMBER);
         y += 2;
-        put(buf, l, l.x + 1, y, play.def.title, BRIGHT);
+        put(buf, l, l.x + 1, y, &play.def.title, BRIGHT);
         y += 1;
-        put(buf, l, l.x + 1, y, &format!("{}  {} bpm", play.diff.name(), play.def.bpm), DIM);
+        put(buf, l, l.x + 1, y, &format!("{}  {:.0} bpm", play.diff.name(), play.def.bpm), DIM);
         y += 2;
+        if play.practice {
+            if let Some(pr) = &app.practice {
+                let name = pr.parts().get(pr.section).map(|p| p.0.clone()).unwrap_or_default();
+                put(buf, l, l.x + 1, y - 1, &format!("practice {name} {:.0}%", SPEEDS[pr.speed] * 100.0), AMBER);
+                y += 1;
+            }
+        }
         put(buf, l, l.x + 1, y, "score", DIM);
         y += 1;
         put(buf, l, l.x + 1, y, &thousands(play.score()), BRIGHT);
@@ -503,7 +511,14 @@ fn draw_play(app: &App, play: &Play, buf: &mut Buffer, area: Rect) {
             put(buf, l, l.x + 1, y + 2, &format!("miss    {}", play.counts[2]), RED);
             y += 4;
         }
-        if y + 1 < l.bottom() {
+        if play.practice {
+            if let (Some(pr), true) = (&app.practice, y + 1 < l.bottom()) {
+                put(buf, l, l.x + 1, y, &format!("round {}", pr.runs + 1), TEXT);
+                if let Some(a) = pr.last {
+                    put(buf, l, l.x + 1, y + 1, &format!("last  {:.1}%", a * 100.0), DIM);
+                }
+            }
+        } else if y + 1 < l.bottom() {
             put(buf, l, l.x + 1, y, "groove", DIM);
             let w = l.width.saturating_sub(3);
             let filled = (play.groove * w as f64).round() as u16;
@@ -540,7 +555,7 @@ fn draw_play(app: &App, play: &Play, buf: &mut Buffer, area: Rect) {
     // the song's progress along the bottom
     let by = area.bottom().saturating_sub(1);
     if by > g.hy + 1 {
-        let t = format!(" {} / {} ", mmss(play.now), mmss(play.length));
+        let t = format!(" {} / {} ", mmss(play.now - play.start), mmss(play.length - play.start));
         let w = area.width.saturating_sub(t.len() as u16 + 4);
         let done = (play.progress() * w as f64) as u16;
         for i in 0..w {
@@ -554,13 +569,14 @@ fn draw_play(app: &App, play: &Play, buf: &mut Buffer, area: Rect) {
     }
 }
 
-fn draw_pause(buf: &mut Buffer, area: Rect, item: usize) {
+fn draw_pause(buf: &mut Buffer, area: Rect, item: usize, practice: bool) {
     let w = 28.min(area.width);
     let h = 7.min(area.height);
     let r = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
     fill(buf, r, Color::Rgb(16, 24, 20));
     centre(buf, r, r.y + 1, "paused", AMBER);
-    for (i, s) in PAUSE_ITEMS.iter().enumerate() {
+    let items = if practice { PRACTICE_PAUSE_ITEMS } else { PAUSE_ITEMS };
+    for (i, s) in items.iter().enumerate() {
         let sel = i == item;
         let text = if sel { format!("\u{25b8} {s}") } else { format!("  {s}") };
         put(buf, r, r.x + 4, r.y + 3 + i as u16, &text, if sel { BRIGHT } else { DIM });
@@ -585,13 +601,20 @@ fn draw_select(app: &App, buf: &mut Buffer, area: Rect) {
     let mut y = draw_title(buf, area, area.y + 1);
     centre(buf, area, y, "every note you hit is a note of the song", DIM);
     y += 2;
-    let lw = 64.min(area.width.saturating_sub(4));
+    let lw = 72.min(area.width.saturating_sub(4));
     let lx = area.x + (area.width - lw) / 2;
-    let list = Rect::new(lx, y, lw, SONGS.len() as u16);
+    // the list scrolls when it is longer than the room for it
+    let below = 10;
+    let room = area.bottom().saturating_sub(y + below).max(3) as usize;
+    let n = app.songs.len();
+    let rows = n.min(room);
+    let first = if app.sel < rows / 2 { 0 } else { (app.sel - rows / 2).min(n - rows) };
+    let list = Rect::new(lx, y, lw, rows as u16);
     let d = app.diff;
-    for (i, s) in SONGS.iter().enumerate() {
+    for (row_i, i) in (first..first + rows).enumerate() {
+        let s = &app.songs[i];
         let sel = i == app.sel;
-        let row = y + i as u16;
+        let row = y + row_i as u16;
         if row >= area.bottom() {
             break;
         }
@@ -601,21 +624,35 @@ fn draw_select(app: &App, buf: &mut Buffer, area: Rect) {
             }
         }
         let fg = if sel { BRIGHT } else { TEXT };
-        put(buf, list, lx, row, if sel { "\u{25b8}" } else { " " }, AMBER);
-        put(buf, list, lx + 2, row, s.title, fg);
-        let st = stars(app.density[i][d.index()]);
+        let marker = if sel {
+            "\u{25b8}"
+        } else if (row_i == 0 && first > 0) || (row_i + 1 == rows && first + rows < n) {
+            "\u{22ee}"
+        } else {
+            " "
+        };
+        put(buf, list, lx, row, marker, AMBER);
+        put(buf, list, lx + 2, row, &s.title, fg);
+        let st = stars(app.density.get(i).map_or(0.0, |x| x[d.index()]));
         let star: String = (0..5).map(|k| if k < st { '\u{2605}' } else { '\u{2606}' }).collect();
-        let info = format!("{:>3.0} bpm  {}  {}", s.bpm, mmss(s.secs()), star);
-        let best = app.best(i, d).map(|b| format!("  {} {:>9}{}", b.grade, thousands(b.score), if b.full_combo { "\u{2713}" } else { " " })).unwrap_or_else(|| format!("  {:>12}", "-"));
-        let right = format!("{info}{best}");
-        let rx = list.right().saturating_sub(right.chars().count() as u16);
-        if rx > lx + 2 + s.title.len() as u16 {
-            let x = put(buf, list, rx, row, &info, if sel { TEXT } else { DIM });
+        let meter = if s.meter != 4 { format!("{}/4", s.meter) } else if s.swing > 0.55 { "swing".into() } else { String::new() };
+        let info = format!("{meter:>5} {:>3.0} bpm  {}  {}", s.bpm, mmss(s.secs()), star);
+        let best = app.best(&s.id, d).map(|b| format!("  {} {:>9}{}", b.grade, thousands(b.score), if b.full_combo { "\u{2713}" } else { " " })).unwrap_or_else(|| format!("  {:>12}", "-"));
+        // as much of it as there is room for: the best score goes first
+        let title_end = lx + 3 + s.title.chars().count() as u16;
+        let full = list.right().saturating_sub((info.chars().count() + best.chars().count()) as u16);
+        let short = list.right().saturating_sub(info.chars().count() as u16);
+        if full > title_end {
+            let x = put(buf, list, full, row, &info, if sel { TEXT } else { DIM });
             put(buf, list, x, row, &best, if sel { AMBER } else { DIM });
+        } else if short > title_end {
+            put(buf, list, short, row, &info, if sel { TEXT } else { DIM });
         }
     }
-    y += SONGS.len() as u16 + 1;
-    centre(buf, area, y, SONGS[app.sel].blurb, DIM);
+    y += rows as u16 + 1;
+    if let Some(s) = app.songs.get(app.sel) {
+        centre(buf, area, y, &s.blurb, DIM);
+    }
     y += 2;
     // the difficulty
     let mut parts = Vec::new();
@@ -629,12 +666,7 @@ fn draw_select(app: &App, buf: &mut Buffer, area: Rect) {
     let pos = line.find('[').map(|b| line[..b].chars().count() as u16).unwrap_or(0);
     put(buf, area, x0 + pos, y, &format!("[{}]", d.name()), AMBER);
     y += 2;
-    let what = match d {
-        Difficulty::Easy => "the melody's notes on the beat; the rest plays itself",
-        Difficulty::Normal => "the melody's notes on every eighth",
-        Difficulty::Hard => "the whole melody, and the snare with your other hand",
-    };
-    centre(buf, area, y, what, DIM);
+    centre(buf, area, y, difficulty_text(d), DIM);
     y += 2;
     // a little scope of the preview
     if area.bottom() > y + 6 {
@@ -652,12 +684,71 @@ fn draw_select(app: &App, buf: &mut Buffer, area: Rect) {
         centre(buf, area, y + 1, &format!("play with {keys}"), DIM);
     }
     if y + 2 < area.bottom() {
-        centre(buf, area, y + 2, "Enter play    \u{2191}\u{2193} song    \u{2190}\u{2192} difficulty    Esc quit", DIM);
+        centre(buf, area, y + 2, "Enter play   \u{2191}\u{2193} song   \u{2190}\u{2192} difficulty   p practise   Esc quit", DIM);
     }
     if let Some((s, at)) = &app.note {
         if at.elapsed().as_secs_f64() < 2.0 {
             centre(buf, area, area.bottom().saturating_sub(1), s, AMBER);
         }
+    }
+}
+
+fn difficulty_text(d: Difficulty) -> &'static str {
+    match d {
+        Difficulty::Easy => "the melody's notes on the beat; the rest plays itself",
+        Difficulty::Normal => "the melody's notes on every eighth",
+        Difficulty::Hard => "the whole melody, its chords, and the snare with your other hand",
+    }
+}
+
+fn draw_practice(app: &App, buf: &mut Buffer, area: Rect) {
+    let Some(pr) = &app.practice else { return };
+    let mut y = area.y + 1;
+    centre(buf, area, y, "P R A C T I C E", AMBER);
+    y += 2;
+    centre(buf, area, y, &pr.song.title, BRIGHT);
+    y += 1;
+    centre(buf, area, y, "one section on repeat, slower if you like; no groove meter", DIM);
+    y += 2;
+    let parts = pr.parts();
+    let below = 8;
+    let room = area.bottom().saturating_sub(y + below).max(3) as usize;
+    let rows = parts.len().min(room);
+    let first = if pr.section < rows / 2 { 0 } else { (pr.section - rows / 2).min(parts.len() - rows) };
+    let lw = 40.min(area.width.saturating_sub(4));
+    let lx = area.x + (area.width - lw) / 2;
+    for (row_i, i) in (first..first + rows).enumerate() {
+        let (name, at, steps) = &parts[i];
+        let row = y + row_i as u16;
+        let sel = i == pr.section;
+        if sel {
+            for x in lx..lx + lw {
+                buf[(x, row)].set_bg(Color::Rgb(20, 40, 30));
+            }
+        }
+        put(buf, area, lx, row, if sel { "\u{25b8}" } else { " " }, AMBER);
+        put(buf, area, lx + 2, row, &format!("{:>2}  {name}", i + 1), if sel { BRIGHT } else { TEXT });
+        let info = format!("{} bars  {}", steps / pr.song.bar(), mmss(pr.song.time(*at)));
+        put(buf, area, (lx + lw).saturating_sub(info.chars().count() as u16 + 1), row, &info, if sel { TEXT } else { DIM });
+    }
+    y += rows as u16 + 1;
+    let mut parts_s = Vec::new();
+    for (i, k) in SPEEDS.iter().enumerate().rev() {
+        let t = format!("{:.0}%", k * 100.0);
+        parts_s.push(if i == pr.speed { format!("[{t}]") } else { format!(" {t} ") });
+    }
+    centre(buf, area, y, &format!("tempo  {}", parts_s.join(" ")), TEXT);
+    y += 1;
+    centre(buf, area, y, &format!("{:.0} bpm", pr.song.bpm * SPEEDS[pr.speed]), DIM);
+    y += 2;
+    centre(buf, area, y, &format!("{}: {}", app.diff.name(), difficulty_text(app.diff)), TEXT);
+    y += 2;
+    if let Some(a) = pr.last {
+        centre(buf, area, y, &format!("{} rounds, the last at {:.1}%", pr.runs, a * 100.0), DIM);
+    }
+    y += 1;
+    if y < area.bottom() {
+        centre(buf, area, area.bottom() - 1, "Enter play  \u{2191}\u{2193} section  \u{2190}\u{2192} tempo  Tab difficulty  Esc back", DIM);
     }
 }
 
@@ -673,7 +764,7 @@ fn grade_colour(g: &str) -> Color {
 
 fn draw_results(app: &App, play: &Play, new_best: bool, age: f64, buf: &mut Buffer, area: Rect) {
     let mut y = area.y + 1;
-    centre(buf, area, y, play.def.title, BRIGHT);
+    centre(buf, area, y, &play.def.title, BRIGHT);
     y += 1;
     centre(buf, area, y, &format!("{}  {} notes", play.diff.name(), play.notes().len()), DIM);
     y += 2;
@@ -714,7 +805,7 @@ fn draw_results(app: &App, play: &Play, new_best: bool, age: f64, buf: &mut Buff
     if new_best && y < area.bottom() {
         centre(buf, area, y, if age.fract() < 0.6 { "NEW BEST!" } else { "" }, AMBER);
         y += 2;
-    } else if let Some(b) = app.best(play.song, play.diff) {
+    } else if let Some(b) = app.best(&play.def.id, play.diff) {
         if !play.demo && y < area.bottom() {
             centre(buf, area, y, &format!("your best: {} {}", b.grade, thousands(b.score)), DIM);
         }
@@ -801,8 +892,8 @@ mod tests {
         use crate::app::{App, Cal, Screen};
         use crate::synth::Audio;
         let mut app = App::new(Audio::headless(), crate::save::Settings::default(), Vec::new(), true);
-        let def = SONGS[2];
-        let mut p = Play::new(2, def, Difficulty::Hard, def.secs());
+        let def = app.songs[2].clone();
+        let mut p = Play::new(def, Difficulty::Hard, None, 2.5);
         p.demo = true;
         let mut t = -3.0;
         while !p.finished {
@@ -811,10 +902,12 @@ mod tests {
         }
         let screens = [
             Screen::Select,
-            Screen::Play { play: Box::new(Play::new(0, SONGS[0], Difficulty::Easy, 60.0)), paused: true, item: 1, over_at: None },
+            Screen::Play { play: Box::new(Play::new(app.songs[0].clone(), Difficulty::Easy, None, 2.5)), paused: true, item: 1, over_at: None },
             Screen::Results { play: Box::new(p), new_best: true, shown: std::time::Instant::now() },
             Screen::Calibrate(Cal { bpm: 100.0, taps: vec![0.02, 0.04, -0.01], flash: 0.0, done: false }),
+            Screen::Practice,
         ];
+        app.practice = Some(crate::app::Practice { song: app.songs[8].clone(), section: 2, speed: 3, runs: 2, last: Some(0.9) });
         for (i, s) in screens.into_iter().enumerate() {
             app.screen = s;
             for (w, h) in [(60, 20), (80, 24), (100, 30), (160, 50)] {

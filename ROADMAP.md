@@ -16,11 +16,18 @@ unfinished, 1.0.0 when everything planned is in.
 - Oscilloscope of the actual output and a running log of judgements
 - Demo autoplay, `--shot`, `--bench`, session logging
 
-## 0.6.0: more to play
+## 0.6.0 (2026-11-14): more to play
 
-- Three or four more songs, among them one in 3/4 and one with swing
+- Four more songs: Waltz for a Spinning Disk (3/4), Cron at Midnight, Tab
+  Complete Shuffle (swung) and Escape Sequence; nine in all
+- Songs can have any meter from 2/4 to 7/4 and a swing
 - Chords on Hard: two lanes at once where the score has a harmony note
-- A practice mode: any section, slowed down, without the groove meter
+  (five songs have harmonies)
+- A practice mode: any section, 50% to 100% tempo, a count-in, round and
+  round without the groove meter
+- The songs live in `songs/*.song`, built in, in the notation 0.7 opens to
+  players
+- A lost song goes on to its results again (the clock stopped with the music)
 
 ## 0.7.0: the song file
 
