@@ -117,7 +117,8 @@ fn main() -> io::Result<()> {
     // answers it, and the query then waits two seconds)
     let kitty = !demo && supports_keyboard_enhancement().unwrap_or(false);
     if kitty {
-        let flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES | KeyboardEnhancementFlags::REPORT_EVENT_TYPES | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
+        let flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES | KeyboardEnhancementFlags::REPORT_EVENT_TYPES | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+            | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS;
         execute!(io::stdout(), PushKeyboardEnhancementFlags(flags))?;
     }
     let _ = execute!(io::stdout(), EnableFocusChange);
@@ -190,6 +191,7 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App, input: &mut Input
         if next < now {
             next = now + FRAME;
         }
+        input.typing = app.typing();
         input.poll_pad();
         let presses = std::mem::take(&mut input.presses);
         app.exact = input.exact || input.pad_name.is_some();

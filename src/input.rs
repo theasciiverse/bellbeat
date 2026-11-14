@@ -31,6 +31,14 @@ pub enum K {
     Back,
     Tab,
     CtrlC,
+    /// Ctrl and a letter (lower case), other than Ctrl-C.
+    Ctrl(char),
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Delete,
+    F(u8),
     PadLeft,
     PadRight,
     PadUp,
@@ -96,6 +104,8 @@ pub fn nav(k: K) -> Option<Nav> {
 pub struct Input {
     /// Key releases are reported (kitty keyboard protocol).
     pub exact: bool,
+    /// Typing text (the song editor): a held key repeats, as in any editor.
+    pub typing: bool,
     pub presses: Vec<Press>,
     last: Vec<(K, Instant)>,
     #[cfg(feature = "gamepad")]
@@ -112,6 +122,7 @@ impl Input {
     pub fn new(exact: bool) -> Input {
         Input {
             exact,
+            typing: false,
             presses: Vec::new(),
             last: Vec::new(),
             #[cfg(feature = "gamepad")]
@@ -123,7 +134,17 @@ impl Input {
     pub fn on_key(&mut self, k: KeyEvent, at: Instant) {
         let key = match k.code {
             KeyCode::Char('c' | 'C') if k.modifiers.contains(KeyModifiers::CONTROL) => K::CtrlC,
+            KeyCode::Char(c) if k.modifiers.contains(KeyModifiers::CONTROL) => K::Ctrl(c.to_ascii_lowercase()),
+            // with every key reported as a code, a shifted letter can come
+            // as the plain letter and Shift
+            KeyCode::Char(c) if k.modifiers.contains(KeyModifiers::SHIFT) && c.is_ascii_lowercase() => K::Char(c.to_ascii_uppercase()),
             KeyCode::Char(c) => K::Char(c),
+            KeyCode::Home => K::Home,
+            KeyCode::End => K::End,
+            KeyCode::PageUp => K::PageUp,
+            KeyCode::PageDown => K::PageDown,
+            KeyCode::Delete => K::Delete,
+            KeyCode::F(n) => K::F(n),
             KeyCode::Left => K::Left,
             KeyCode::Right => K::Right,
             KeyCode::Up => K::Up,
@@ -138,9 +159,13 @@ impl Input {
             KeyEventKind::Release => {
                 self.presses.push(Press { key, down: false, at, exact: true });
             }
-            KeyEventKind::Repeat => {}
+            KeyEventKind::Repeat => {
+                if self.typing {
+                    self.presses.push(Press { key, down: true, at, exact: true });
+                }
+            }
             KeyEventKind::Press => {
-                if !self.exact {
+                if !self.exact && !self.typing {
                     // a repeat looks like a press here: keep the time of the
                     // latest, and let it through only after a gap
                     let prev = self.last.iter_mut().find(|(k, _)| *k == key);
@@ -251,6 +276,25 @@ mod tests {
         assert!(downs.len() <= 3, "{}", downs.len());
         assert_eq!(downs[0].lane(), Some(0));
         assert!(!downs[0].exact);
+    }
+
+    #[test]
+    fn typing_keeps_repeats_and_reads_ctrl_and_shift() {
+        let mut i = Input::new(false);
+        i.typing = true;
+        let t = Instant::now();
+        for n in 0..5 {
+            i.on_key(key('x', KeyEventKind::Press), t + Duration::from_millis(n * 30));
+        }
+        assert_eq!(i.presses.len(), 5);
+        i.presses.clear();
+        let mut k = key('s', KeyEventKind::Press);
+        k.modifiers = KeyModifiers::CONTROL;
+        i.on_key(k, t);
+        let mut k = key('e', KeyEventKind::Press);
+        k.modifiers = KeyModifiers::SHIFT;
+        i.on_key(k, t);
+        assert_eq!(i.presses.iter().map(|p| p.key).collect::<Vec<_>>(), vec![K::Ctrl('s'), K::Char('E')]);
     }
 
     #[test]
