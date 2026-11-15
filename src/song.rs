@@ -139,16 +139,22 @@ fn err<T>(line: usize, msg: impl Into<String>) -> Result<T, SongError> {
 // ------------------------------------------------------------------ built in
 
 /// The songs that come with the game, gentlest first.
-const BUILTIN: [(&str, &str); 9] = [
+const BUILTIN: [(&str, &str); 15] = [
     ("lullaby-for-a-daemon", include_str!("../songs/lullaby-for-a-daemon.song")),
+    ("heartbeat-of-the-fan", include_str!("../songs/heartbeat-of-the-fan.song")),
     ("hello-world", include_str!("../songs/hello-world.song")),
+    ("segfault-march", include_str!("../songs/segfault-march.song")),
     ("waltz-for-a-spinning-disk", include_str!("../songs/waltz-for-a-spinning-disk.song")),
     ("cron-at-midnight", include_str!("../songs/cron-at-midnight.song")),
+    ("five-nines", include_str!("../songs/five-nines.song")),
     ("carriage-return", include_str!("../songs/carriage-return.song")),
     ("tab-complete-shuffle", include_str!("../songs/tab-complete-shuffle.song")),
+    ("pipe-dreams", include_str!("../songs/pipe-dreams.song")),
     ("null-pointer-samba", include_str!("../songs/null-pointer-samba.song")),
+    ("seven-bit-blues", include_str!("../songs/seven-bit-blues.song")),
     ("escape-sequence", include_str!("../songs/escape-sequence.song")),
     ("kernel-panic", include_str!("../songs/kernel-panic.song")),
+    ("sigterm", include_str!("../songs/sigterm.song")),
 ];
 
 pub fn builtins() -> Vec<Song> {

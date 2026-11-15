@@ -6,9 +6,9 @@ terminal was ever built to make.
 Notes fall down four lanes; hit each one as it reaches the line. **Every
 note you hit is a note of the song:** it plays the moment you hit it, and a
 note you miss is a hole in the tune. Play well and you are playing the
-melody. The nine songs are Asciiverse's own, synthesised as they play:
-a lullaby, a waltz in 3/4, a swung shuffle, a samba and a kernel panic
-among them.
+melody. The fifteen songs are Asciiverse's own, synthesised as they play:
+a lullaby, a march in 2/4, a waltz in 3/4, a swung shuffle, a samba, a
+blues in 7/4 and a kernel panic among them.
 
 ## How to play
 

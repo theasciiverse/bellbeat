@@ -1,0 +1,64 @@
+# Pipe Dreams: a Bellbeat song, our own.
+
+title  Pipe Dreams
+blurb  Pipe one program into the next and watch where the bytes end up.
+bpm    132
+voice  pulse
+order  intro verse chorus verse chorus outro
+
+[intro] 4 bars
+chords Cm Ab Eb Bb
+bass   1 . . . 1 . 8 . 1 . . . 1 . 8 .
+arp    1 3 5 8 5 3 1 3 5 8 5 3 1 3 5 8
+kick   x... x... x... x...
+hat    ..x. ..x. ..x. ..x.
+
+[verse] 8 bars
+chords Cm Ab Eb Bb Cm Ab Fm G
+lead   G5 . G5 . C6 - Eb6 - D6 - C6 - G5 - - -
+       Ab5 . C6 . Eb6 - - - C6 - Ab5 - Eb5 - - -
+       G5 . Bb5 . Eb6 - G6 - F6 - Eb6 - Bb5 - - -
+       D6 - - - F6 - - - D6 - Bb5 - F5 - - -
+       G5 . G5 . C6 - Eb6 - G6 - F6 - Eb6 - D6 -
+       C6 - - - Ab5 - - - Eb6 - - - C6 - - -
+       F5 . Ab5 . C6 . F6 . Eb6 - D6 - C6 - Ab5 -
+       B5 - - - D6 - - - G6 - - - . . . .
+bass   1 . . . 1 . 8 . 1 . . . 1 . 8 .
+arp    1 3 5 8 5 3 1 3 5 8 5 3 1 3 5 8
+kick   x... ..x. x... ..x.
+snare  .... x... .... x...
+hat    x.x. x.x. x.x. x.x.
+
+[chorus] 8 bars
+chords Fm Cm Ab Bb Fm Cm G G
+lead   C6 - - - Ab5 - C6 - F6 - - - Eb6 - C6 -
+       Eb6 - - - - - - - G5 - C6 - Eb6 - - -
+       C6 - - - Eb6 - - - Ab6 - - - G6 - Eb6 -
+       F6 - - - - - - - D6 - Bb5 - F5 - - -
+       C6 - - - Ab5 - C6 - F6 - - - G6 - Ab6 -
+       G6 - - - Eb6 - - - C6 - - - Eb6 - G6 -
+       F6 - - - D6 - - - B5 - - - D6 - F6 -
+       G6 - - - - - - - - - - - . . . .
+harmony Ab5 - - - F5 - Ab5 - C6 - - - Ab5 - F5 -
+       C6 - - - - - - - Eb5 - G5 - C6 - - -
+       Ab5 - - - C6 - - - Eb6 - - - Bb5 - C6 -
+       D6 - - - - - - - Bb5 - F5 - D5 - - -
+       Ab5 - - - F5 - Ab5 - C6 - - - Eb6 - F6 -
+       Eb6 - - - C6 - - - G5 - - - C6 - Eb6 -
+       D6 - - - B5 - - - G5 - - - B5 - D6 -
+       D6 - - - - - - - - - - - . . . .
+bass   1 . . . 1 . 8 . 1 . . . 1 . 8 .
+arp    1 3 5 8 5 3 1 3 5 8 5 3 1 3 5 8
+kick   x... ..x. x... x...
+snare  .... x... .... x...
+hat    x.xx x.xx x.xx x.xx
+
+[outro] 2 bars
+chords Cm Cm
+lead   G5 . C6 . Eb6 . G6 . Eb6 - - - - - - -
+       C6 - - - - - - - - - - - . . . .
+bass   1 . . . 1 . 8 . 1 - - - - - - -
+arp    1 3 5 8 5 3 1 3 5 8 5 3 1 3 5 8
+       1 3 5 8 . . . . . . . . . . . .
+kick   x... x... x... x...
+       x... .... .... ....

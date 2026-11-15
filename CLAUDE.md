@@ -10,15 +10,15 @@ you hit plays that note of the tune the moment you hit it; a note you miss is
 a hole in the song. The difficulty only chooses how much of the melody is
 yours (Easy: notes on the beat; Normal: on the eighths; Hard: all of it,
 its chords where the song has a harmony line, plus the snare backbeat with
-the other hand); the rest plays itself. No audio files: nine songs of our
+the other hand); the rest plays itself. No audio files: fifteen songs of our
 own, written as text in `songs/*.song` (built in with `include_str!`) and
 synthesised live. **All music is our own, written for this game**: no
 existing melodies, folk or public-domain ones included.
 
-**Status** (2026-11-14, version 0.7.0): playable end to end. Song list with a
+**Status** (2026-11-15, version 0.8.0: six new songs, 2/4 to 7/4, 76 to 172 bpm): playable end to end. Song list with a
 live preview, three difficulties, play, pause menu, results with grade and
 best score, calibration, practice (a section, slowed down, on repeat),
-players' own song files and a song editor. Not yet played by David. `ROADMAP.md` has what each release up to 1.0.0 brings.
+players' own song files and a song editor. Played by David 2026-11-14 ("bellbeat is amazing!"); the six 0.8 songs not yet. `ROADMAP.md` has what each release up to 1.0.0 brings.
 Licence MIT. Repo github.com/theasciiverse/bellbeat (public), branch `main`,
 tags `vX.Y.Z`; the release workflow builds every tag (`--locked`, so commit
 Cargo.lock before tagging).

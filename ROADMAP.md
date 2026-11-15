@@ -40,6 +40,13 @@ unfinished, 1.0.0 when everything planned is in.
   it is typed, the song checked after every key, listen from the cursor's
   section, play from there, undo, save
 
+## 0.8.0 (2026-11-15): six new songs
+
+- Heartbeat of the Fan (76 bpm, the gentlest), Segfault March (2/4), Five
+  Nines (5/4), Pipe Dreams (a racing arpeggio), Seven-Bit Blues (7/4,
+  swung) and SIGTERM (172 bpm, the fastest); fifteen in all
+- Chords on Hard in three more of them
+
 ## 1.0.0
 
 - Played through by David on all songs and difficulties, and tuned
