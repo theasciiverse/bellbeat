@@ -29,6 +29,7 @@ cargo run --release -- --demo --song kernel-panic --difficulty hard
 cargo run --release -- --shot 14 --size 100x30 --song kernel-panic   # headless frame
 cargo run --release -- --bench 600 --size 100x30
 asciiverse/record-preview.sh                 # re-record the 100x30 catalog preview
+cargo run --release -- --render hello-world out/   # a song as WAV files (mix, backing, melody notes)
 RUST_LOG=debug cargo run --release 2>bellbeat.log
 cargo test
 ```
@@ -88,6 +89,11 @@ cargo test
   `K::Ctrl`; the kitty flags include alternate keys, so Shift gives `#`.
 - `src/save.rs`: `scores` and `settings` as text in the state folder
   (`BELLBEAT_STATE` overrides it, for tests).
+- `src/render.rs`: `--render SONG DIR`, a built-in song as 16-bit mono WAV
+  from the game's own synth: `mix.wav`, `backing.wav` (all but the melody),
+  `tones/` (each melody note alone with its echo), `notes.tsv` (the melody's
+  timing) and `song.txt`. Cascade's packaging bundles the mixes, tapline's
+  builds keysound charts from the rest (2026-11-16).
 - `src/font.rs`: Braillestorm's 5x7 font in half blocks, for the title and
   the grade.
 

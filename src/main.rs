@@ -15,6 +15,7 @@ mod editor;
 mod font;
 mod input;
 mod play;
+mod render;
 mod save;
 mod song;
 mod synth;
@@ -72,6 +73,8 @@ escape-sequence, kernel-panic.
   --fps N                    draw N frames a second (60; the game runs at 120)
   --shot SECS [--size WxH]   play headless on the demo, print the screen
   --bench FRAMES [--size WxH]  time frames without a terminal
+  --render SONG DIR          write a built-in song out as WAV files (the mix,
+                             the backing, each melody note) for other games
 
 The editor: the song file as text. Typing a note on a melody line and a
 space sounds it. Ctrl-S save, Ctrl-L listen from the cursor's section,
@@ -114,6 +117,17 @@ fn main() -> io::Result<()> {
     if let Some(secs) = arg("--shot") {
         shot(secs.parse().unwrap_or(10.0), size.unwrap_or((100, 30)), song_id.unwrap_or("kernel-panic"), diff.unwrap_or(Difficulty::Hard), settings);
         return Ok(());
+    }
+    if let Some(id) = arg("--render") {
+        let Some(dir) = args.iter().position(|a| a == "--render").and_then(|i| args.get(i + 2)) else {
+            eprintln!("--render SONG DIR");
+            std::process::exit(2);
+        };
+        let Some(song) = song::builtins().into_iter().find(|s| s.id == id) else {
+            eprintln!("no song {id}");
+            std::process::exit(2);
+        };
+        return render::run(&song, std::path::Path::new(dir));
     }
     if let Some(frames) = arg("--bench") {
         bench(frames.parse().unwrap_or(600), size.unwrap_or((100, 30)), settings);
